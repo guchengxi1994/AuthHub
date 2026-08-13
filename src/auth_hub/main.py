@@ -21,5 +21,6 @@ app = create_app(
     settings=AuthHubSettings(
         admin_username=os.getenv("AUTH_HUB_ADMIN_USERNAME", "admin"),
         admin_password=os.getenv("AUTH_HUB_ADMIN_PASSWORD", "change-me-now"),
+        module_registration_key=os.getenv("AUTH_HUB_MODULE_REGISTRATION_KEY") or None,
     ),
 )

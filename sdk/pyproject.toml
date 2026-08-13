@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "auth-hub-client"
+version = "0.1.0"
+description = "Python client and FastAPI integration for AuthHub upstream services."
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+fastapi = ["fastapi>=0.110"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["auth_hub_client"]

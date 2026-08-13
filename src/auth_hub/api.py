@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -224,11 +225,9 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         return {"items": [hub.audit_event_dict(event) for event in hub.list_audit_events(limit=limit, actor_id=actor_id, action=action)]}
 
     @app.post("/api/modules/register")
-    async def register_module(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = hub.authenticate(_bearer(authorization))
-        if not actor.is_super_admin:
-            raise AuthorizationError("SYSTEM_ADMIN_REQUIRED")
-        return hub.register_module(payload.get("module_id") or payload.get("moduleId"), str(payload.get("module_name") or payload.get("moduleName") or ""), description=payload.get("description"), permissions=payload.get("permissions"), apis=payload.get("apis"), resources=payload.get("resources"), metadata=payload.get("metadata"), actor_id=actor.id).to_dict()
+    async def register_module(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None)):
+        actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
+        return hub.register_module(payload.get("module_id") or payload.get("moduleId"), str(payload.get("module_name") or payload.get("moduleName") or ""), description=payload.get("description"), permissions=payload.get("permissions"), apis=payload.get("apis"), resources=payload.get("resources"), metadata=payload.get("metadata"), actor_id=actor_id).to_dict()
 
     app.state.auth_hub = hub
     return app
@@ -239,6 +238,13 @@ def _require_admin(hub: AuthHub, authorization: Optional[str]):
     if not actor.is_super_admin:
         raise AuthorizationError("SYSTEM_ADMIN_REQUIRED")
     return actor
+
+
+def _module_registrar_actor(hub: AuthHub, authorization: Optional[str], registration_key: Optional[str]) -> str:
+    configured_key = hub.settings.module_registration_key
+    if configured_key and registration_key and hmac.compare_digest(configured_key, registration_key):
+        return "service:module-registration"
+    return _require_admin(hub, authorization).id
 
 
 def _bearer(value: Optional[str]) -> str:

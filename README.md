@@ -2,7 +2,7 @@
 
 AuthHub 是一个独立的企业级认证与 RBAC 授权基础框架。它只负责用户、组织、角色、权限、动态模块、Token/Session 和审计，不承载具体业务模块，也不托管业务数据库或 Redis 的生命周期。
 
-当前交付的是框架核心与可选 FastAPI HTTP 适配器；Python SDK 应在服务端 API 稳定后基于这些契约单独发布。
+当前交付包含框架核心、可选 FastAPI HTTP 适配器，以及位于 `sdk/` 的独立 Python 上游服务客户端 `auth-hub-client`。
 
 ## 架构边界
 
@@ -36,6 +36,17 @@ AuthHub 的可视化配置以一条明确的 RBAC 链路组织：
 
 管理端创建模块、角色和权限时不要求填写技术 ID 或编码，系统会自动生成。Python SDK 和上游服务仍可提交显式模块 ID、角色编码或权限编码，以便进行幂等同步和程序化鉴权。
 
+## 业务系统接入
+
+AuthHub 不会内置或调用你的 MCP Server、MCP Tool、订单 API 或前端页面；`mcp_tool` 等只是资源分类。实际资源由你的业务后端通过 `auth-hub-client` 声明和同步，例如 `knowledge` 模块下的 `search` MCP Tool，或 `orders` 模块下的 `/orders` API。
+
+```text
+浏览器 -> 业务后端 -> auth-hub-client -> AuthHub 鉴权
+                    -> 通过后才执行业务 API / MCP Tool
+```
+
+业务服务启动时用 `AUTH_HUB_MODULE_REGISTRATION_KEY` 同步模块清单；浏览器请求仍携带用户的 AuthHub Bearer Token 到业务后端。业务后端以 SDK/依赖项校验权限，前端不持有注册密钥，也不直接调用模块注册接口。完整 FastAPI 示例见 [sdk/README.md](sdk/README.md)。
+
 ## 快速启动
 
 核心包零运行时依赖，默认 `AuthHub.local()` 使用 SQLite 文件和内存缓存，可直接开发和测试：
@@ -52,6 +63,12 @@ AUTH_HUB_DATABASE=./var/authhub.db uvicorn auth_hub.main:app --reload
 ```bash
 pip install -e '.[web]'
 uvicorn auth_hub.main:app --reload
+```
+
+上游 Python 服务安装独立 SDK：
+
+```bash
+pip install 'auth-hub-client @ file:///path/to/auth-hub/sdk[fastapi]'
 ```
 
 默认初始化一个系统级 `admin` 用户，开发密码由 `AuthHubSettings(admin_password=...)` 指定；本地缺少外部数据库时使用 SQLite，缺少 Redis 时使用内存缓存。生产环境应将宿主提供的 SQLAlchemy/其他数据库 Repository、RedisCache、生产密码哈希器和 TokenService 注入 `AuthHub(...)`。
@@ -107,4 +124,4 @@ hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log
 1. 完成 SQLAlchemy/PostgreSQL/MySQL 仓储适配器和 Redis 缓存适配器（仍由宿主传入连接）。
 2. 固化 OpenAPI/错误码/Token 响应契约。
 3. 固化管理端的 OpenAPI/静态资源发布和端到端测试。
-4. API 稳定后再制作 `auth-hub-client` Python SDK，并以版本化契约测试保证兼容性。
+4. 发布 `auth-hub-client` 到私有 PyPI，并以版本化契约测试保证兼容性。

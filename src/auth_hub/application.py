@@ -23,11 +23,21 @@ RESOURCE_ACTIONS = {
 }
 
 
+def _registered_permission_code(module_id: str, permission: Mapping[str, Any]) -> str:
+    code = str(permission.get("id") or permission.get("code") or "")
+    if code: return code
+    resource_type = str(permission.get("resource_type") or "")
+    resource_key = str(permission.get("resource_key") or "")
+    action = str(permission.get("action") or "")
+    return f"{module_id}:{resource_type}:{resource_key}:{action}" if resource_type and resource_key and action else ""
+
+
 @dataclass(frozen=True)
 class AuthHubSettings:
     permission_cache_ttl: int = 60
     admin_username: str = "admin"
     admin_password: str = "change-me-now"
+    module_registration_key: Optional[str] = None
 
 
 class AuthHub:
@@ -333,16 +343,44 @@ class AuthHub:
         removed_resource_ids = previous_resource_ids - registered_resource_ids
         if any(item.metadata.get("resource_id") in removed_resource_ids for item in self.repository.list_permissions()):
             raise ValidationError("registered resource is still referenced by permissions")
-        module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), list(permissions or []), list(apis or []), resources)
+        declared_resources = {
+            str(item.get("id") or f"{module_id}:{item.get('resource_type') or item.get('type')}:{item.get('resource_key') or item.get('key')}"): item
+            for item in resources
+        }
+        resources_by_key = {
+            (str(item.get("resource_type") or item.get("type") or ""), str(item.get("resource_key") or item.get("key") or "")): resource_id
+            for resource_id, item in declared_resources.items()
+        }
+        normalized_permissions: List[Mapping[str, Any]] = []
+        for item in permissions or []:
+            permission = dict(item)
+            resource_id = str(permission.get("resource_id") or "")
+            if not resource_id and permission.get("resource_key"):
+                resource_id = resources_by_key.get((str(permission.get("resource_type") or ""), str(permission.get("resource_key")))) or ""
+            if resource_id:
+                resource = declared_resources.get(resource_id)
+                if not resource: raise ValidationError("registered permission must reference a declared resource")
+                resource_type = str(resource.get("resource_type") or resource.get("type") or "")
+                resource_key = str(resource.get("resource_key") or resource.get("key") or "")
+                action = str(permission.get("action") or "")
+                if action not in RESOURCE_ACTIONS[resource_type]: raise ValidationError("action is not supported by this resource type")
+                if permission.get("resource_type") and permission["resource_type"] != resource_type: raise ValidationError("registered permission resource type does not match")
+                if permission.get("resource_key") and permission["resource_key"] != resource_key: raise ValidationError("registered permission resource key does not match")
+                permission.update({"id": _registered_permission_code(module_id, {**permission, "resource_type": resource_type, "resource_key": resource_key, "action": action}), "resource_id": resource_id, "resource_type": resource_type, "resource_key": resource_key, "action": action})
+            normalized_permissions.append(permission)
+        module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), normalized_permissions, list(apis or []), resources)
         module = self.repository.save_module(module)
         new_codes = set()
         for item in module.permissions:
-            code = str(item.get("id") or item.get("code") or "")
+            code = _registered_permission_code(module_id, item)
             if code:
                 new_codes.add(code)
-                self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), metadata=dict(item)))
+                resource_id = str(item.get("resource_id") or "")
+                resource_type = str(item.get("resource_type") or "")
+                kind = "api" if resource_type == "api" else "resource" if resource_id else "operation"
+                self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), kind=kind, metadata=dict(item)))
         if previous:
-            old_codes = {str(item.get("id") or item.get("code") or "") for item in previous.permissions}
+            old_codes = {_registered_permission_code(module_id, item) for item in previous.permissions}
             for code in old_codes - new_codes:
                 existing = self.repository.get_permission(code)
                 if existing and existing.module_id == module_id: self.repository.delete_permission(code)

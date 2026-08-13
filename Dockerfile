@@ -8,8 +8,9 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
+COPY sdk ./sdk
 
-RUN pip install --no-cache-dir ".[web,redis]"
+RUN pip install --no-cache-dir ".[web,redis]" ./sdk
 
 RUN useradd --create-home --uid 10001 authhub && mkdir -p /var/lib/authhub && chown -R authhub:authhub /app /var/lib/authhub
 USER authhub
@@ -17,4 +18,3 @@ USER authhub
 EXPOSE 8000
 
 CMD ["uvicorn", "auth_hub.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
