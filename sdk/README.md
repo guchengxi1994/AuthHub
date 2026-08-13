@@ -3,7 +3,7 @@
 `auth-hub-client` is installed by an upstream **Python backend**. It is not a browser SDK and it does not own the upstream service's database, API routes, or MCP execution.
 
 ```bash
-pip install 'auth-hub-client @ file:///path/to/auth-hub/sdk[fastapi]'
+pip install 'auth-hub-client @ file:///path/to/auth-hub/sdk[fastapi,sqlalchemy]'
 ```
 
 ## Runtime Chain
@@ -93,6 +93,100 @@ authz = client.check_resource_or_raise(
 `manifest.resource_id("order")` derives `knowledge:entity:order` from the declared module and resource; application code should not hardcode it. Set `PermissionSpec(..., scope="owner")` or `scope="organization"` for those checks. `global` skips instance ownership checks.
 
 The business database remains the source of truth. Create/update the business record first and then call the idempotent registration method; after deleting the business record, call `client.unregister_resource_instance(manifest.resource_id("order"), str(order.id))`. AuthHub never deletes business records and deliberately rejects deleting a resource definition or module while instance indexes remain.
+
+## SQLAlchemy Transactional Outbox
+
+For a production business service, do not call AuthHub from an ORM signal or a
+normal decorator immediately after `INSERT`/`UPDATE`. The surrounding business
+transaction can still roll back. Use the SDK's SQLAlchemy Outbox instead: it
+writes the ownership event into the **same business transaction** and sends it
+only after commit. This has the same intent as Spring's
+`@TransactionalEventListener(AFTER_COMMIT)`, with a durable retry record.
+
+Add `outbox.table` to your business application's normal Alembic migration
+(AuthHub does not create or migrate the business schema):
+
+```python
+from sqlalchemy import MetaData
+from sqlalchemy.orm import sessionmaker
+from auth_hub_client import (
+    AuthHubOutbox,
+    AuthHubOutboxDispatcher,
+    dispatch_pending,
+    install_after_commit_dispatcher,
+    track_resource_instance,
+    untrack_resource_instance,
+)
+
+metadata = MetaData()                 # usually your application's Base.metadata
+outbox = AuthHubOutbox(metadata)      # creates the auth_hub_outbox table in metadata
+SessionLocal = sessionmaker(bind=engine)
+
+dispatcher = AuthHubOutboxDispatcher(outbox, client)
+install_after_commit_dispatcher(SessionLocal, dispatcher)
+```
+
+Decorate the **service-layer methods** that own the business transaction, not
+raw repository functions. The decorator only inserts an outbox event; it does
+not commit and it does not make a network request itself.
+
+```python
+@track_resource_instance(
+    outbox,
+    resource_id=manifest.resource_id("order"),
+    external_id=lambda order: order.id,
+    owner_user_id=lambda order: order.creator_id,
+    organization_id=lambda order: order.organization_id,
+)
+def create_order(*, session, command) -> Order:
+    order = Order(creator_id=command.user_id, organization_id=command.org_id)
+    session.add(order)
+    return order
+
+@track_resource_instance(
+    outbox,
+    resource_id=manifest.resource_id("order"),
+    external_id=lambda order: order.id,
+    owner_user_id=lambda order: order.owner_id,
+    organization_id=lambda order: order.organization_id,
+)
+def transfer_order(*, session, order_id, owner_id) -> Order:
+    order = session.get(Order, order_id)
+    order.owner_id = owner_id
+    return order
+
+@untrack_resource_instance(
+    outbox,
+    resource_id=manifest.resource_id("order"),
+    external_id=lambda order: order.id,
+)
+def delete_order(*, session, order_id) -> Order:
+    order = session.get(Order, order_id)
+    session.delete(order)
+    return order
+
+with SessionLocal.begin() as session:
+    create_order(session=session, command=command)
+```
+
+`install_after_commit_dispatcher()` makes a best-effort, low-latency delivery
+after a successful commit. Keep a periodic worker as the durable recovery path
+for process crashes and temporary AuthHub outages:
+
+```python
+def run_authhub_outbox_worker() -> None:
+    while True:
+        result = dispatch_pending(SessionLocal, dispatcher, limit=100)
+        if result.delivered == 0 and result.deferred == 0:
+            break
+```
+
+The dispatcher uses exponential backoff and retains exhausted events as dead
+letters. After correcting a configuration error, inspect the `auth_hub_outbox`
+table and call `outbox.requeue(session, event_id)` to retry one. AuthHub's
+registration and deletion endpoints are idempotent, so at-least-once delivery
+is safe. Events for one `(resource_id, external_id)` are delivered in enqueue
+order, preventing a retried old owner update from overtaking a newer event.
 
 For a normal FastAPI route, the route dependency can get the external ID from the path parameter directly:
 

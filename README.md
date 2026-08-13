@@ -135,7 +135,7 @@ hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log
 
 权限范围可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先检查角色权限，再检查此实例归属。系统超级管理员对已存在的资源实例始终允许操作。业务数据库仍是订单、文档等字段的唯一真相源。
 
-业务服务在自身事务成功后幂等调用“登记/更新归属”；删除业务记录后幂等调用“注销”。这是一致性索引，不是业务数据副本：短暂同步失败应由业务服务通过 outbox、重试队列或定期对账补偿，不能由 AuthHub 反向修改业务表。为防止丢失仍在使用的归属索引，资源定义或模块在存在资源实例时会拒绝删除。
+业务服务在自身事务成功后幂等调用“登记/更新归属”；删除业务记录后幂等调用“注销”。这是一致性索引，不是业务数据副本：短暂同步失败应由业务服务通过 outbox、重试队列或定期对账补偿，不能由 AuthHub 反向修改业务表。`auth-hub-client[sqlalchemy]` 已提供事务型 Outbox、提交后投递和重试能力，业务服务只需将其 `auth_hub_outbox` 表纳入自己的迁移。为防止丢失仍在使用的归属索引，资源定义或模块在存在资源实例时会拒绝删除。
 
 ## 后续阶段
 
