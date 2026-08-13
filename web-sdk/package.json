@@ -1,0 +1,50 @@
+{
+  "name": "@auth-hub/react",
+  "version": "0.1.0",
+  "description": "React permission components for AuthHub-backed business applications.",
+  "license": "MIT",
+  "keywords": [
+    "authhub",
+    "rbac",
+    "permissions",
+    "react",
+    "authorization"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guchengxi1994/AuthHub.git",
+    "directory": "web-sdk"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.tsx --format esm,cjs --dts --clean",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

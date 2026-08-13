@@ -37,10 +37,16 @@ manifest = ModuleManifest(
     resources=[
         ResourceSpec.mcp_tool("search", "知识检索工具"),
         ResourceSpec.api("/documents", "文档接口"),
+        ResourceSpec.page("document-list", "文档列表页面"),
+        ResourceSpec.ui_action("document-export", "导出文档"),
+        ResourceSpec.ui_component("document-sensitive-tab", "敏感信息 Tab"),
     ],
     permissions=[
         PermissionSpec("execute", "执行知识检索", resource="search"),
         PermissionSpec("read", "读取文档", resource="/documents"),
+        PermissionSpec("view", "查看文档页面", resource="document-list"),
+        PermissionSpec("execute", "导出文档", resource="document-export"),
+        PermissionSpec("view", "查看敏感信息 Tab", resource="document-sensitive-tab"),
     ],
 )
 
@@ -75,9 +81,29 @@ The type is a stable authorization classification, not a hardcoded business reso
 - `mcp_server`: an upstream MCP server identifier.
 - `mcp_tool`: an upstream tool identifier.
 - `page`: a menu/page visibility identifier.
+- `ui_action`: a button, context-menu command, or batch operation.
+- `ui_component`: a Tab, region, or other conditionally rendered UI component.
 - `custom`: a domain-specific protected object.
 
 Choose the type that matches the thing being protected. The actual names and keys always come from the business service's manifest.
+
+## Permission Snapshot Proxy For React
+
+The browser SDK needs the current user's permission codes, but the browser should not call AuthHub directly. Expose a business-backend endpoint that forwards the authenticated Bearer token:
+
+```python
+from fastapi import Depends, FastAPI
+from auth_hub_client import AuthHubFastAPI
+
+auth = AuthHubFastAPI(client)
+app = FastAPI()
+
+@app.get("/api/session/permissions")
+async def session_permissions(snapshot: dict = Depends(auth.permission_snapshot())):
+    return snapshot  # {"permissions": ["knowledge:mcp_tool:search:execute", ...]}
+```
+
+The React app calls this endpoint once after login. If the business app stores its own session cookie, the endpoint may translate that session into the AuthHub access token before calling `permission_snapshot`; the SDK itself does not manage browser cookies or tokens.
 
 ## Data Scope
 

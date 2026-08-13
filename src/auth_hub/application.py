@@ -12,13 +12,15 @@ from .ports.repositories import AuthHubRepository
 from .ports.services import AuditLog, Cache, PasswordHasher, TokenService
 
 _UNSET = object()
-RESOURCE_TYPES = frozenset({"api", "entity", "mcp_server", "mcp_tool", "page", "custom"})
+RESOURCE_TYPES = frozenset({"api", "entity", "mcp_server", "mcp_tool", "page", "ui_action", "ui_component", "custom"})
 RESOURCE_ACTIONS = {
     "api": frozenset({"read", "create", "update", "delete", "execute", "manage"}),
     "entity": frozenset({"view", "read", "create", "update", "delete", "manage"}),
     "mcp_server": frozenset({"view", "read", "create", "update", "delete", "manage"}),
     "mcp_tool": frozenset({"view", "execute", "manage"}),
     "page": frozenset({"view", "manage"}),
+    "ui_action": frozenset({"execute", "manage"}),
+    "ui_component": frozenset({"view", "manage"}),
     "custom": frozenset({"view", "read", "create", "update", "delete", "execute", "manage"}),
 }
 
@@ -316,6 +318,9 @@ class AuthHub:
         return [self.check_permission(access_token, permission, resource=resource, context=context) for permission in permissions]
 
     def user_permissions(self, user_id: str) -> List[str]:
+        user = self._user_or_raise(user_id)
+        if user.is_super_admin:
+            return sorted(permission.code for permission in self.repository.list_permissions() if permission.enabled)
         codes = set()
         for role_id in self.repository.user_role_ids(user_id):
             role = self.repository.get_role(role_id)

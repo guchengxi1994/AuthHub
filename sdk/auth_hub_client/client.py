@@ -38,6 +38,10 @@ class ResourceSpec:
     @classmethod
     def page(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "page", **kwargs)
     @classmethod
+    def ui_action(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "ui_action", **kwargs)
+    @classmethod
+    def ui_component(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "ui_component", **kwargs)
+    @classmethod
     def custom(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "custom", **kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -117,6 +121,9 @@ class AuthHubClient:
         if not result.get("authenticated"): raise AuthHubClientError("authentication required", code=result.get("reason"), status_code=401)
         if not result.get("allowed"): raise AuthorizationDenied(permission, result.get("reason", "PERMISSION_DENIED"))
         return result
+
+    def user_permissions(self, access_token: str) -> Mapping[str, Any]:
+        return self._request("GET", "/api/auth/user-permissions", headers={"Authorization": f"Bearer {access_token}"})
 
     def _request(self, method: str, path: str, payload: Optional[Mapping[str, Any]] = None, *, headers: Optional[Mapping[str, str]] = None) -> Mapping[str, Any]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None

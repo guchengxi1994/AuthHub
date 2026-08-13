@@ -2,7 +2,7 @@
 
 AuthHub 是一个独立的企业级认证与 RBAC 授权基础框架。它只负责用户、组织、角色、权限、动态模块、Token/Session 和审计，不承载具体业务模块，也不托管业务数据库或 Redis 的生命周期。
 
-当前交付包含框架核心、可选 FastAPI HTTP 适配器，以及位于 `sdk/` 的独立 Python 上游服务客户端 `auth-hub-client`。
+当前交付包含框架核心、可选 FastAPI HTTP 适配器、位于 `sdk/` 的独立 Python 上游服务客户端 `auth-hub-client`，以及位于 `web-sdk/` 的 React 权限渲染包 `@auth-hub/react`。
 
 ## 架构边界
 
@@ -30,8 +30,8 @@ AuthHub 的可视化配置以一条明确的 RBAC 链路组织：
 ```
 
 - **业务模块**：上游业务的边界，例如“订单中心”或“MCP 管理”。它是归属和隔离单位，不是前端页面或组件。
-- **资源**：需要授权的业务对象，并且必须属于一个业务模块。可选类型为 `api`（API 接口）、`entity`（业务实体/集合）、`mcp_server`、`mcp_tool`、`page`（页面/菜单）和 `custom`。页面/菜单只是资源的一种，不能把“前端模块”或“页面组件”泛化为全部资源。
-- **权限**：对一个资源执行的动作。页面/菜单只能使用 `view`/`manage`，MCP Tool 只能使用 `view`/`execute`/`manage`，API 和业务实体可以使用 `read`、`create`、`update`、`delete` 等动作。权限的资源、模块和操作由服务端校验，不能只依赖管理端下拉框。
+- **资源**：需要授权的业务对象，并且必须属于一个业务模块。可选类型为 `api`（API 接口）、`entity`（业务实体/集合）、`mcp_server`、`mcp_tool`、`page`（页面/菜单）、`ui_action`（按钮/命令/批量操作）、`ui_component`（Tab/区域等条件渲染组件）和 `custom`。这些是授权分类，不是 AuthHub 内置的业务对象；实际名称和标识由上游服务注册。
+- **权限**：对一个资源执行的动作。页面/菜单与 UI 组件只能使用 `view`/`manage`，UI 操作只能使用 `execute`/`manage`，MCP Tool 只能使用 `view`/`execute`/`manage`，API 和业务实体可以使用 `read`、`create`、`update`、`delete` 等动作。权限的资源、模块和操作由服务端校验，不能只依赖管理端下拉框。
 - **角色**：权限集合；用户通过角色获得权限。用户也可关联一个或多个组织，用于组织归属和后续数据范围策略扩展。
 
 管理端创建模块、角色和权限时不要求填写技术 ID 或编码，系统会自动生成。Python SDK 和上游服务仍可提交显式模块 ID、角色编码或权限编码，以便进行幂等同步和程序化鉴权。
@@ -45,7 +45,7 @@ AuthHub 不会内置或调用你的 MCP Server、MCP Tool、订单 API 或前端
                     -> 通过后才执行业务 API / MCP Tool
 ```
 
-业务服务启动时用 `AUTH_HUB_MODULE_REGISTRATION_KEY` 同步模块清单；浏览器请求仍携带用户的 AuthHub Bearer Token 到业务后端。业务后端以 SDK/依赖项校验权限，前端不持有注册密钥，也不直接调用模块注册接口。完整 FastAPI 示例见 [sdk/README.md](sdk/README.md)。
+业务服务启动时用 `AUTH_HUB_MODULE_REGISTRATION_KEY` 同步模块清单；浏览器请求仍携带用户的 AuthHub Bearer Token 到业务后端。业务后端以 SDK/依赖项校验权限，前端不持有注册密钥，也不直接调用模块注册接口。业务后端还可以暴露一个 `/api/session/permissions` 代理端点，供 `@auth-hub/react` 在登录后一次性加载权限快照。完整 FastAPI 示例见 [sdk/README.md](sdk/README.md)。
 
 ## 快速启动
 

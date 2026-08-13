@@ -27,6 +27,16 @@ class AuthHubFastAPI:
                 raise HTTPException(status_code=503, detail="AuthHub unavailable") from error
         return dependency
 
+    def permission_snapshot(self) -> Callable[..., Mapping[str, Any]]:
+        async def dependency(authorization: Optional[str] = Header(None)) -> Mapping[str, Any]:
+            token = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+            try:
+                return await asyncio.to_thread(self.client.user_permissions, token)
+            except Exception as error:
+                if getattr(error, "status_code", None) == 401: raise HTTPException(status_code=401, detail=str(error)) from error
+                raise HTTPException(status_code=503, detail="AuthHub unavailable") from error
+        return dependency
+
 
 def require_permission(client: AuthHubClient, permission: str, *, resource: Optional[str] = None) -> Callable[..., Mapping[str, Any]]:
     return AuthHubFastAPI(client).require(permission, resource=resource)

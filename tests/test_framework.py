@@ -73,6 +73,17 @@ class FrameworkTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             hub.create_permission(None, "Execute orders", module_id=module.id, resource_id=resource.id, action="execute")
 
+        action_resource = hub.create_resource(module.id, "ui_action", "order-create", "Create order")
+        component_resource = hub.create_resource(module.id, "ui_component", "order-sensitive-tab", "Sensitive tab")
+        action_permission = hub.create_permission(None, "Create order", module_id=module.id, resource_id=action_resource.id, action="execute", role_ids=[role.id])
+        component_permission = hub.create_permission(None, "View sensitive tab", module_id=module.id, resource_id=component_resource.id, action="view", role_ids=[role.id])
+        self.assertEqual(action_permission.metadata["resource_type"], "ui_action")
+        self.assertEqual(component_permission.metadata["resource_type"], "ui_component")
+        with self.assertRaises(ValidationError):
+            hub.create_permission(None, "View create order", module_id=module.id, resource_id=action_resource.id, action="view")
+        with self.assertRaises(ValidationError):
+            hub.create_permission(None, "Execute sensitive tab", module_id=module.id, resource_id=component_resource.id, action="execute")
+
         permission = hub.create_permission(None, "Read orders", module_id=module.id, resource_id=resource.id, action="read", role_ids=[role.id])
         self.assertEqual(permission.metadata["resource_id"], resource.id)
         self.assertEqual(permission.metadata["action"], "read")
@@ -82,6 +93,12 @@ class FrameworkTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             hub.delete_resource(resource.id)
+
+    def test_super_admin_permission_snapshot_contains_all_enabled_permissions(self):
+        hub = AuthHub.in_memory()
+        hub.register_module("orders", "Orders", permissions=[{"id": "orders:page:list:view"}])
+        tokens = hub.login("admin", "change-me-now")
+        self.assertIn("orders:page:list:view", hub.user_permissions(hub.authenticate(tokens["access_token"]).id))
 
     def test_module_sync_cannot_remove_a_resource_referenced_by_a_permission(self):
         hub = AuthHub.in_memory()

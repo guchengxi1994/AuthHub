@@ -4,7 +4,7 @@ const pages = {
 };
 const resourceTypes = {
   api: 'API 接口', entity: '业务实体', mcp_server: 'MCP Server',
-  mcp_tool: 'MCP Tool', page: '页面/菜单', custom: '自定义资源'
+  mcp_tool: 'MCP Tool', page: '页面/路由', ui_action: 'UI 操作', ui_component: 'UI 组件', custom: '自定义资源'
 };
 const actions = ['view', 'read', 'create', 'update', 'delete', 'execute', 'manage'];
 const actionLabels = {
@@ -17,6 +17,8 @@ const resourceActions = {
   mcp_server: ['view', 'read', 'create', 'update', 'delete', 'manage'],
   mcp_tool: ['view', 'execute', 'manage'],
   page: ['view', 'manage'],
+  ui_action: ['execute', 'manage'],
+  ui_component: ['view', 'manage'],
   custom: actions
 };
 const state = { token: sessionStorage.getItem('authhub.token'), me: null, page: 'overview' };
@@ -370,7 +372,9 @@ async function showNewResource() {
       entity: ['例如 order', '填写业务实体或集合的稳定标识。'],
       mcp_server: ['例如 production-server', '填写 MCP Server 的稳定标识。'],
       mcp_tool: ['例如 search_orders', '填写 MCP Tool 的稳定名称。'],
-      page: ['例如 orders:list', '填写菜单或页面的稳定路由/标识。'],
+      page: ['例如 orders-list', '填写页面或路由的稳定标识；菜单通常复用所属页面的查看权限。'],
+      ui_action: ['例如 order-create', '填写按钮、批量命令或下拉操作的稳定标识。'],
+      ui_component: ['例如 order-tabs', '填写 Tab、区域或其他显示组件的稳定标识。'],
       custom: ['例如 warehouse-zone', '填写上游系统用于识别该对象的稳定键。']
     };
     key.placeholder = hints[type][0]; $('#resource-key-help', el).textContent = hints[type][1];
