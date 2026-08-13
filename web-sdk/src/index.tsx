@@ -42,8 +42,14 @@ export interface PermissionState {
 
 const PermissionContext = createContext<PermissionState | null>(null);
 
-function normalizeSnapshot(snapshot: AuthHubPermissionSnapshot | readonly string[]): readonly string[] {
-  return Array.isArray(snapshot) ? snapshot : snapshot.permissions;
+function normalizeSnapshot(
+  snapshot: AuthHubPermissionSnapshot | readonly string[]
+): readonly string[] {
+  if (Array.isArray(snapshot)) {
+    return snapshot;
+  }
+
+  return (snapshot as AuthHubPermissionSnapshot).permissions;
 }
 
 export function PermissionProvider({
