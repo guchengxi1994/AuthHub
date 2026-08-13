@@ -110,6 +110,18 @@ class AuthHubClient:
     def login(self, username: str, password: str) -> Mapping[str, Any]:
         return self._request("POST", "/api/auth/login", {"username": username, "password": password})
 
+    def refresh(self, refresh_token: str) -> Mapping[str, Any]:
+        return self._request("POST", "/api/auth/refresh", {"refresh_token": refresh_token})
+
+    def logout(self, access_token: str) -> Mapping[str, Any]:
+        return self._request("POST", "/api/auth/logout", headers={"Authorization": f"Bearer {access_token}"})
+
+    def me(self, access_token: str) -> Mapping[str, Any]:
+        return self._request("GET", "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
+
+    def check_token(self, access_token: str) -> Mapping[str, Any]:
+        return self._request("POST", "/api/auth/check-token", headers={"Authorization": f"Bearer {access_token}"})
+
     def check(self, access_token: str, permission: str, *, resource: Optional[str] = None, context: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
         payload: Dict[str, Any] = {"permission": permission}
         if resource is not None: payload["resource"] = resource

@@ -345,8 +345,22 @@ class AuthHub:
             str(item.get("id") or f"{module_id}:{item.get('resource_type') or item.get('type')}:{item.get('resource_key') or item.get('key')}")
             for item in (previous.resources if previous else [])
         }
+        previous_permission_codes = {
+            _registered_permission_code(module_id, item)
+            for item in (previous.permissions if previous else [])
+        }
         removed_resource_ids = previous_resource_ids - registered_resource_ids
-        if any(item.metadata.get("resource_id") in removed_resource_ids for item in self.repository.list_permissions()):
+        # A module snapshot may remove resources, but manually created
+        # permissions can still reference them and must be rejected. Only
+        # permissions previously created by module registration are eligible
+        # for automatic cleanup below.
+        if any(
+            item.metadata.get("resource_id") in removed_resource_ids
+            and item.module_id == module_id
+            and item.code not in previous_permission_codes
+            and not item.metadata.get("registration_managed")
+            for item in self.repository.list_permissions()
+        ):
             raise ValidationError("registered resource is still referenced by permissions")
         declared_resources = {
             str(item.get("id") or f"{module_id}:{item.get('resource_type') or item.get('type')}:{item.get('resource_key') or item.get('key')}"): item
@@ -383,7 +397,9 @@ class AuthHub:
                 resource_id = str(item.get("resource_id") or "")
                 resource_type = str(item.get("resource_type") or "")
                 kind = "api" if resource_type == "api" else "resource" if resource_id else "operation"
-                self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), kind=kind, metadata=dict(item)))
+                metadata = dict(item)
+                metadata["registration_managed"] = True
+                self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), kind=kind, metadata=metadata))
         if previous:
             old_codes = {_registered_permission_code(module_id, item) for item in previous.permissions}
             for code in old_codes - new_codes:
