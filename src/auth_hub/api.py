@@ -80,7 +80,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.post("/api/users")
     async def create_user(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
         actor = _require_admin(hub, authorization)
-        return hub.user_dict(hub.create_user(str(payload.get("username", "")), str(payload.get("password", "")), display_name=str(payload.get("display_name", "")), email=payload.get("email"), actor_id=actor.id))
+        return hub.user_dict(hub.create_user(str(payload.get("username", "")), str(payload.get("password", "")), display_name=str(payload.get("display_name", "")), email=payload.get("email"), organization_ids=payload.get("organization_ids") or [], role_ids=payload.get("role_ids") or [], actor_id=actor.id))
 
     @app.patch("/api/users/{user_id}")
     async def update_user(user_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
@@ -140,7 +140,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.post("/api/roles")
     async def create_role(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
         actor = _require_admin(hub, authorization)
-        return hub.role_dict(hub.create_role(str(payload.get("code", "")), str(payload.get("name", "")), description=payload.get("description"), actor_id=actor.id))
+        return hub.role_dict(hub.create_role(payload.get("code"), str(payload.get("name", "")), description=payload.get("description"), actor_id=actor.id))
 
     @app.patch("/api/roles/{role_id}")
     async def update_role(role_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
@@ -180,7 +180,8 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.post("/api/permissions")
     async def create_permission(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
         actor = _require_admin(hub, authorization)
-        return hub.permission_dict(hub.create_permission(str(payload.get("code", "")), str(payload.get("name", "")), description=payload.get("description"), kind=str(payload.get("kind", "operation")), metadata=payload.get("metadata"), actor_id=actor.id))
+        permission = hub.create_permission(payload.get("code"), str(payload.get("name", "")), description=payload.get("description"), kind=str(payload.get("kind", "operation")), module_id=payload.get("module_id"), resource_id=payload.get("resource_id"), action=payload.get("action"), role_ids=payload.get("role_ids") or [], metadata=payload.get("metadata"), actor_id=actor.id)
+        return hub.permission_dict(permission)
 
     @app.patch("/api/permissions/{permission_code:path}")
     async def update_permission(permission_code: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
@@ -202,6 +203,17 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         _require_admin(hub, authorization)
         return {"items": [hub.resource_dict(item) for item in hub.list_resources(module_id)]}
 
+    @app.post("/api/resources")
+    async def create_resource(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
+        actor = _require_admin(hub, authorization)
+        return hub.resource_dict(hub.create_resource(str(payload.get("module_id") or ""), str(payload.get("resource_type") or ""), str(payload.get("resource_key") or ""), str(payload.get("name") or ""), metadata=payload.get("metadata"), actor_id=actor.id))
+
+    @app.delete("/api/resources/{resource_id}")
+    async def delete_resource(resource_id: str, authorization: Optional[str] = Header(None)):
+        actor = _require_admin(hub, authorization)
+        hub.delete_resource(resource_id, actor_id=actor.id)
+        return {"success": True}
+
     @app.delete("/api/modules/{module_id}")
     async def delete_module(module_id: str, authorization: Optional[str] = Header(None)):
         actor = _require_admin(hub, authorization); hub.delete_module(module_id, actor_id=actor.id); return {"success": True}
@@ -216,7 +228,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         actor = hub.authenticate(_bearer(authorization))
         if not actor.is_super_admin:
             raise AuthorizationError("SYSTEM_ADMIN_REQUIRED")
-        return hub.register_module(str(payload.get("module_id") or payload.get("moduleId") or ""), str(payload.get("module_name") or payload.get("moduleName") or ""), description=payload.get("description"), permissions=payload.get("permissions"), apis=payload.get("apis"), resources=payload.get("resources"), metadata=payload.get("metadata"), actor_id=actor.id).to_dict()
+        return hub.register_module(payload.get("module_id") or payload.get("moduleId"), str(payload.get("module_name") or payload.get("moduleName") or ""), description=payload.get("description"), permissions=payload.get("permissions"), apis=payload.get("apis"), resources=payload.get("resources"), metadata=payload.get("metadata"), actor_id=actor.id).to_dict()
 
     app.state.auth_hub = hub
     return app

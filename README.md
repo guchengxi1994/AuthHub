@@ -21,6 +21,21 @@ AuthHub 是一个独立的企业级认证与 RBAC 授权基础框架。它只负
 
 `src/auth_hub/domain` 没有任何 Web、ORM 或 Redis 依赖；`src/auth_hub/ports` 是基础设施适配器需要实现的接口；`infrastructure.py` 提供两种兜底/接入方式：本地 SQLite 持久化数据库、内存 Cache，以及可接收宿主 `redis-py` 客户端的 `RedisCache`。框架使用这些连接，但不创建、部署或关闭宿主的数据库/Redis 服务。
 
+## 授权模型
+
+AuthHub 的可视化配置以一条明确的 RBAC 链路组织：
+
+```text
+业务模块 -> 资源 -> 权限 -> 角色 -> 用户 / 组织
+```
+
+- **业务模块**：上游业务的边界，例如“订单中心”或“MCP 管理”。它是归属和隔离单位，不是前端页面或组件。
+- **资源**：需要授权的业务对象，并且必须属于一个业务模块。可选类型为 `api`（API 接口）、`entity`（业务实体/集合）、`mcp_server`、`mcp_tool`、`page`（页面/菜单）和 `custom`。页面/菜单只是资源的一种，不能把“前端模块”或“页面组件”泛化为全部资源。
+- **权限**：对一个资源执行的动作。页面/菜单只能使用 `view`/`manage`，MCP Tool 只能使用 `view`/`execute`/`manage`，API 和业务实体可以使用 `read`、`create`、`update`、`delete` 等动作。权限的资源、模块和操作由服务端校验，不能只依赖管理端下拉框。
+- **角色**：权限集合；用户通过角色获得权限。用户也可关联一个或多个组织，用于组织归属和后续数据范围策略扩展。
+
+管理端创建模块、角色和权限时不要求填写技术 ID 或编码，系统会自动生成。Python SDK 和上游服务仍可提交显式模块 ID、角色编码或权限编码，以便进行幂等同步和程序化鉴权。
+
 ## 快速启动
 
 核心包零运行时依赖，默认 `AuthHub.local()` 使用 SQLite 文件和内存缓存，可直接开发和测试：
@@ -65,6 +80,8 @@ docker compose up --build
 - `POST /api/auth/check`、`POST /api/auth/check/batch`
 - `GET /api/auth/user-permissions`
 - `POST /api/modules/register`：幂等保存业务模块及权限元数据
+- `POST /api/resources`、`DELETE /api/resources/{resource_id}`：管理模块下的受控资源
+- `POST /api/permissions`：创建资源操作权限，并可同时授予角色
 
 鉴权失败统一返回 `code`，包括 `UNAUTHENTICATED`、`TOKEN_INVALID`、`USER_DISABLED`、`PERMISSION_DENIED` 等。
 

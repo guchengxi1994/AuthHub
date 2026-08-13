@@ -48,6 +48,59 @@ class FrameworkTests(unittest.TestCase):
         self.assertEqual(hub.organization_tree()[0]["name"], "Engineering")
         self.assertEqual(hub.list_users()[1].username, "alice")
 
+    def test_user_creation_assigns_organizations_and_roles(self):
+        hub = AuthHub.in_memory()
+        organization = hub.create_organization("Engineering")
+        role = hub.create_role(None, "Reader")
+        user = hub.create_user("alice", "password", organization_ids=[organization.id], role_ids=[role.id])
+        self.assertEqual(hub.repository.user_organization_ids(user.id), {organization.id})
+        self.assertEqual(hub.repository.user_role_ids(user.id), {role.id})
+
+    def test_resource_permission_model_requires_module_resource_action_and_role_binding(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module(None, "Orders")
+        other_module = hub.register_module(None, "Billing")
+        resource = hub.create_resource(module.id, "entity", "order", "Orders")
+        role = hub.create_role(None, "Order reader")
+        user = hub.create_user("alice", "password", role_ids=[role.id])
+
+        with self.assertRaises(ValidationError):
+            hub.create_resource(module.id, "component", "order-list", "Order list")
+        with self.assertRaises(ValidationError):
+            hub.create_permission(None, "Read orders", module_id=other_module.id, resource_id=resource.id, action="read")
+        with self.assertRaises(ValidationError):
+            hub.create_permission(None, "Read orders", module_id=module.id, resource_id=resource.id)
+        with self.assertRaises(ValidationError):
+            hub.create_permission(None, "Execute orders", module_id=module.id, resource_id=resource.id, action="execute")
+
+        permission = hub.create_permission(None, "Read orders", module_id=module.id, resource_id=resource.id, action="read", role_ids=[role.id])
+        self.assertEqual(permission.metadata["resource_id"], resource.id)
+        self.assertEqual(permission.metadata["action"], "read")
+        self.assertIn(permission.code, hub.repository.role_permission_codes(role.id))
+        tokens = hub.login("alice", "password")
+        self.assertTrue(hub.check_permission(tokens["access_token"], permission.code).allowed)
+
+        with self.assertRaises(ValidationError):
+            hub.delete_resource(resource.id)
+
+    def test_module_sync_cannot_remove_a_resource_referenced_by_a_permission(self):
+        hub = AuthHub.in_memory()
+        hub.register_module("orders", "Orders", resources=[{"resource_type": "entity", "resource_key": "order", "name": "Orders"}])
+        resource = hub.list_resources("orders")[0]
+        hub.create_permission(None, "Read orders", module_id="orders", resource_id=resource.id, action="read")
+        with self.assertRaises(ValidationError):
+            hub.register_module("orders", "Orders", resources=[])
+
+    def test_deleting_module_removes_manual_resource_permissions_and_resources(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module(None, "Orders")
+        resource = hub.create_resource(module.id, "api", "/orders", "Order API")
+        permission = hub.create_permission(None, "Read orders", module_id=module.id, resource_id=resource.id, action="read")
+        hub.delete_module(module.id)
+        self.assertIsNone(hub.repository.get_module(module.id))
+        self.assertEqual(hub.list_resources(module.id), [])
+        self.assertIsNone(hub.repository.get_permission(permission.code))
+
     def test_sqlite_fallback_persists_framework_data(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "authhub.sqlite3")

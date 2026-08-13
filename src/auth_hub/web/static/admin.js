@@ -1,60 +1,480 @@
-const pages = { overview:'概览', authorize:'权限校验', 'module-register':'注册业务模块', users:'用户', organizations:'组织', roles:'角色', permissions:'权限', modules:'业务模块', resources:'资源', audit:'审计日志' };
-const state = { token:sessionStorage.getItem('authhub.token'), me:null, page:'overview', busy:false };
-const $ = (selector, parent=document) => parent.querySelector(selector);
-const $$ = (selector, parent=document) => [...parent.querySelectorAll(selector)];
-const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
-const icon = (name, cls='') => `<i data-lucide="${name}" class="${cls}"></i>`;
+const pages = {
+  overview: '概览', authorize: '权限校验', users: '用户', organizations: '组织',
+  roles: '角色', permissions: '权限', modules: '业务模块', resources: '资源', audit: '审计日志'
+};
+const resourceTypes = {
+  api: 'API 接口', entity: '业务实体', mcp_server: 'MCP Server',
+  mcp_tool: 'MCP Tool', page: '页面/菜单', custom: '自定义资源'
+};
+const actions = ['view', 'read', 'create', 'update', 'delete', 'execute', 'manage'];
+const actionLabels = {
+  view: '查看', read: '读取', create: '创建', update: '更新',
+  delete: '删除', execute: '执行', manage: '管理'
+};
+const resourceActions = {
+  api: ['read', 'create', 'update', 'delete', 'execute', 'manage'],
+  entity: ['view', 'read', 'create', 'update', 'delete', 'manage'],
+  mcp_server: ['view', 'read', 'create', 'update', 'delete', 'manage'],
+  mcp_tool: ['view', 'execute', 'manage'],
+  page: ['view', 'manage'],
+  custom: actions
+};
+const state = { token: sessionStorage.getItem('authhub.token'), me: null, page: 'overview' };
+const $ = (selector, parent = document) => parent.querySelector(selector);
+const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
+const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+const icon = (name, cls = '') => `<i data-lucide="${name}" class="${cls}"></i>`;
 const refreshIcons = () => window.lucide && window.lucide.createIcons();
-const badge = (label, type='muted') => `<span class="status status-${type}">${esc(label)}</span>`;
-const button = (label, action, name, tone='icon') => tone==='icon' ? `<button class="btn-icon" title="${esc(label)}" data-action="${esc(action)}">${icon(name)}</button>` : `<button class="btn-${tone}" data-action="${esc(action)}">${icon(name)}${esc(label)}</button>`;
-const empty = (text, action='') => `<div class="flex min-h-[210px] flex-col items-center justify-center px-5 text-center"><div class="mb-3 grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-400">${icon('inbox')}</div><p class="text-sm text-slate-500">${esc(text)}</p>${action}</div>`;
-const panel = (body, cls='') => `<section class="surface ${cls}">${body}</section>`;
-const table = (headers, rows, emptyText='暂无数据') => panel(`<div class="overflow-x-auto"><table class="data-table"><thead><tr>${headers.map(header=>`<th>${header}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">${empty(emptyText)}</td></tr>`}</tbody></table></div>`);
-const pageHeader = (title, actions='') => `<div class="mb-5 flex min-h-[34px] items-center justify-between gap-3"><div><h1 class="text-[22px] font-semibold leading-none text-slate-900">${esc(title)}</h1></div><div class="flex shrink-0 items-center gap-2">${actions}</div></div>`;
-const jsonPretty = (value) => JSON.stringify(value ?? {}, null, 2);
-function setToast(message, type='success') { const el=$('#toast'); el.textContent=message; el.className=`pointer-events-none fixed bottom-5 right-5 z-50 max-w-sm rounded-lg border px-3 py-2 text-sm shadow-float ${type==='error'?'border-rose-200 bg-rose-50 text-rose-800':'border-emerald-200 bg-white text-emerald-800'}`; clearTimeout(setToast.timer); setToast.timer=setTimeout(()=>el.classList.add('hidden'),3300); }
-function setNotice(message, type='error') { const el=$('#notice'); el.innerHTML=`<div class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${type==='error'?'border-rose-200 bg-rose-50 text-rose-800':'border-emerald-200 bg-emerald-50 text-emerald-800'}">${icon(type==='error'?'circle-alert':'circle-check','mt-0.5 h-4 w-4 shrink-0')}<span>${esc(message)}</span></div>`; el.classList.remove('hidden'); refreshIcons(); }
-function clearNotice() { $('#notice').innerHTML=''; $('#notice').classList.add('hidden'); }
-async function api(path, options={}) { const headers={...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers||{})}; if(state.token) headers.Authorization=`Bearer ${state.token}`; const response=await fetch(path,{...options,headers}); const body=response.status===204?{}:await response.json().catch(()=>({})); if(!response.ok) throw new Error(body.message||body.code||`请求失败（${response.status}）`); return body; }
-function openModal(title, body, wide=false) { const el=$('#modal'); el.className=`modal ${wide?'max-w-3xl':''}`; el.innerHTML=`<div class="flex h-14 items-center justify-between border-b border-slate-200 px-5"><h2 class="text-[15px] font-semibold text-slate-900">${esc(title)}</h2><button class="btn-icon" id="modal-close" title="关闭">${icon('x')}</button></div><div class="modal-body p-5">${body}</div>`; el.showModal(); $('#modal-close').onclick=()=>el.close(); refreshIcons(); return el; }
-function ask(title, message, confirmLabel='确认删除') { return new Promise(resolve=>{ const el=$('#confirm-modal'); el.innerHTML=`<div class="p-5"><div class="mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-rose-50 text-rose-600">${icon('triangle-alert')}</div><h2 class="text-[15px] font-semibold text-slate-900">${esc(title)}</h2><p class="mt-2 text-sm leading-6 text-slate-500">${esc(message)}</p><div class="mt-6 flex justify-end gap-2"><button id="confirm-cancel" class="btn-secondary">取消</button><button id="confirm-yes" class="btn-danger">${esc(confirmLabel)}</button></div></div>`; el.showModal(); $('#confirm-cancel').onclick=()=>{el.close();resolve(false);}; $('#confirm-yes').onclick=()=>{el.close();resolve(true);}; refreshIcons(); }); }
-function status(enabled) { return enabled ? badge('启用','active') : badge('已停用','muted'); }
-function parseJson(value, label, fallback) { if(!value.trim()) return fallback; try { return JSON.parse(value); } catch (_) { throw new Error(`${label} 必须是有效 JSON`); } }
-function setLoading(element, loading, text='保存') { element.disabled=loading; element.innerHTML=loading?`${icon('loader-circle','animate-spin')}处理中…`:`${icon('check')} ${text}`; refreshIcons(); }
-function setPage(page) { state.page=page; $('#shell-title').textContent=pages[page]; $('#shell-context').textContent='AuthHub'; $$('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.page===page)); $('#sidebar').classList.remove('open'); $('#sidebar-backdrop').classList.add('hidden'); render(); }
-function actionResult(result) { return result.allowed ? badge('允许','active') : badge(result.reason||'拒绝', result.authenticated?'danger':'warning'); }
-async function renderOverview() { const [overview,audit] = await Promise.all([api('/api/admin/overview'),api('/api/audit-events?limit=8')]); const metrics=[['用户',overview.users,'users','blue'],['组织',overview.organizations,'network','warning'],['角色',overview.roles,'key-round','active'],['权限',overview.permissions,'key-square','blue'],['模块',overview.modules,'boxes','warning'],['资源',overview.resources,'database-zap','active']]; const auditRows=audit.items.map(event=>`<tr><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(event.occurred_at).toLocaleString())}</td><td class="font-mono text-xs text-slate-700">${esc(event.action)}</td><td class="text-slate-500">${esc(event.target_type)} ${esc(event.target_id||'')}</td><td>${badge(event.outcome,event.outcome==='success'||event.outcome==='allowed'?'active':'danger')}</td></tr>`).join(''); $('#content').innerHTML=pageHeader('概览',`${button('权限校验','goto:authorize','badge-check','secondary')}${button('注册模块','goto:module-register','plug-zap','primary')}`)+`<div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">${metrics.map(([label,value,name,tone])=>`<div class="surface min-w-0 px-4 py-3"><div class="flex items-center justify-between"><span class="text-xs font-medium text-slate-500">${label}</span><span class="grid h-7 w-7 place-items-center rounded-lg ${tone==='active'?'bg-emerald-50 text-emerald-600':tone==='warning'?'bg-amber-50 text-amber-600':'bg-blue-50 text-blue-600'}">${icon(name,'h-4 w-4')}</span></div><div class="mt-2 text-2xl font-semibold leading-none text-slate-900">${value}</div></div>`).join('')}</div>`+`<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"><section class="surface overflow-hidden"><div class="flex h-12 items-center justify-between border-b border-slate-100 px-4"><h2 class="text-sm font-semibold text-slate-800">最近审计</h2><button class="text-sm font-medium text-brand-600 hover:text-brand-700" data-action="goto:audit">查看全部</button></div><div class="overflow-x-auto"><table class="data-table"><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>结果</th></tr></thead><tbody>${auditRows||`<tr><td colspan="4">${empty('暂无审计记录')}</td></tr>`}</tbody></table></div></section><section class="surface p-4"><h2 class="text-sm font-semibold text-slate-800">验证入口</h2><div class="mt-3 divide-y divide-slate-100"><button data-action="goto:authorize" class="flex w-full items-center justify-between py-3 text-left text-sm text-slate-700 hover:text-brand-600"><span class="flex items-center gap-2">${icon('badge-check','h-4 w-4')} 单个或批量权限校验</span>${icon('chevron-right','h-4 w-4')}</button><button data-action="goto:module-register" class="flex w-full items-center justify-between py-3 text-left text-sm text-slate-700 hover:text-brand-600"><span class="flex items-center gap-2">${icon('plug-zap','h-4 w-4')} 注册上游业务模块</span>${icon('chevron-right','h-4 w-4')}</button><button data-action="goto:users" class="flex w-full items-center justify-between py-3 text-left text-sm text-slate-700 hover:text-brand-600"><span class="flex items-center gap-2">${icon('users','h-4 w-4')} 分配用户角色</span>${icon('chevron-right','h-4 w-4')}</button></div></section></div>`; bindActions(); }
-async function renderAuthorize() { $('#content').innerHTML=pageHeader('权限校验')+`<div class="grid gap-5 xl:grid-cols-2"><section class="surface"><div class="border-b border-slate-100 px-5 py-4"><h2 class="text-sm font-semibold text-slate-800">单个权限</h2><p class="mt-1 text-xs text-slate-500">当前登录 Token 将从 Authorization: Bearer 请求头传入</p></div><form id="check-form" class="space-y-4 p-5"><div><label class="label">权限标识 <span class="text-rose-600">*</span></label><input class="field" name="permission" required placeholder="例如 mcp:server:create"></div><div><label class="label">资源标识</label><input class="field" name="resource" placeholder="可选，例如 server:production"></div><div><label class="label">上下文 JSON</label><textarea class="field font-mono text-xs" name="context" placeholder='可选，例如 {"tenant_id":"tenant-a"}'></textarea></div><div class="flex justify-end"><button class="btn-primary" type="submit">${icon('play')}执行校验</button></div></form><div id="check-result" class="hidden border-t border-slate-100 px-5 py-4"></div></section><section class="surface"><div class="border-b border-slate-100 px-5 py-4"><h2 class="text-sm font-semibold text-slate-800">批量权限</h2><p class="mt-1 text-xs text-slate-500">每行一个权限标识，减少上游服务网络请求</p></div><form id="batch-check-form" class="space-y-4 p-5"><div><label class="label">权限标识 <span class="text-rose-600">*</span></label><textarea class="field font-mono text-xs" name="permissions" required placeholder="mcp:server:read&#10;mcp:server:create&#10;mcp:tool:execute"></textarea></div><div><label class="label">资源标识</label><input class="field" name="resource" placeholder="可选"></div><div class="flex justify-end"><button class="btn-primary" type="submit">${icon('list-checks')}批量校验</button></div></form><div id="batch-result" class="hidden border-t border-slate-100 px-5 py-4"></div></section></div>`; $('#check-form').onsubmit=submitCheck; $('#batch-check-form').onsubmit=submitBatchCheck; refreshIcons(); }
-async function submitCheck(event) { event.preventDefault(); const form=new FormData(event.currentTarget); const button=$('button[type="submit"]',event.currentTarget); try { setLoading(button,true,'执行校验'); const context=parseJson(String(form.get('context')), '上下文 JSON', undefined); const body={permission:form.get('permission')}; if(form.get('resource')) body.resource=form.get('resource'); if(context!==undefined) body.context=context; const result=await api('/api/auth/check',{method:'POST',body:JSON.stringify(body)}); const el=$('#check-result'); el.classList.remove('hidden'); el.innerHTML=`<div class="mb-3 flex items-center justify-between"><span class="text-sm font-semibold text-slate-800">校验结果</span>${actionResult(result)}</div><dl class="grid grid-cols-[100px_minmax(0,1fr)] gap-y-2 text-sm"><dt class="text-slate-500">用户 ID</dt><dd class="break-all font-mono text-xs text-slate-700">${esc(result.user_id||'-')}</dd><dt class="text-slate-500">权限</dt><dd class="font-mono text-xs text-slate-700">${esc(result.permission)}</dd><dt class="text-slate-500">认证状态</dt><dd>${result.authenticated?badge('已认证','active'):badge('未认证','warning')}</dd><dt class="text-slate-500">命中方式</dt><dd class="text-slate-700">${esc(result.matched_by||result.reason||'-')}</dd></dl>`; refreshIcons(); } catch(error) { setNotice(error.message); } finally { setLoading(button,false,'执行校验'); } }
-async function submitBatchCheck(event) { event.preventDefault(); const form=new FormData(event.currentTarget); const button=$('button[type="submit"]',event.currentTarget); try { setLoading(button,true,'批量校验'); const permissions=String(form.get('permissions')).split(/\r?\n/).map(value=>value.trim()).filter(Boolean); const body={permissions}; if(form.get('resource')) body.resource=form.get('resource'); const result=await api('/api/auth/check/batch',{method:'POST',body:JSON.stringify(body)}); const el=$('#batch-result'); el.classList.remove('hidden'); el.innerHTML=table(['权限','认证','结果','原因'],result.results.map(item=>`<tr><td class="font-mono text-xs text-slate-700">${esc(item.permission)}</td><td>${item.authenticated?badge('已认证','active'):badge('未认证','warning')}</td><td>${actionResult(item)}</td><td class="text-xs text-slate-500">${esc(item.reason||item.matched_by||'-')}</td></tr>`),'未返回结果'); refreshIcons(); } catch(error) { setNotice(error.message); } finally { setLoading(button,false,'批量校验'); } }
-async function renderModuleRegister() { $('#content').innerHTML=pageHeader('注册业务模块')+panel(`<form id="module-register-form" class="p-5"><div class="mb-5 grid gap-4 md:grid-cols-2"><div><label class="label">模块 ID <span class="text-rose-600">*</span></label><input class="field" name="module_id" required placeholder="例如 mcp"></div><div><label class="label">模块名称 <span class="text-rose-600">*</span></label><input class="field" name="module_name" required placeholder="例如 MCP 管理"></div><div class="md:col-span-2"><label class="label">描述</label><input class="field" name="description" placeholder="模块用途说明"></div></div><div class="grid gap-4 lg:grid-cols-2"><div><label class="label">权限定义 JSON</label><textarea class="field font-mono text-xs" name="permissions">[
-  {"id": "mcp:server:create", "name": "创建 MCP Server"}
-]</textarea></div><div><label class="label">API 元数据 JSON</label><textarea class="field font-mono text-xs" name="apis">[
-  {"method": "POST", "path": "/mcp/servers", "permission": "mcp:server:create"}
-]</textarea></div><div><label class="label">资源定义 JSON</label><textarea class="field font-mono text-xs" name="resources">[
-  {"resource_type": "mcp_server", "resource_key": "default", "name": "默认 MCP Server"}
-]</textarea></div><div><label class="label">模块 metadata JSON</label><textarea class="field font-mono text-xs" name="metadata">{}</textarea></div></div><div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4"><p class="text-xs text-slate-500">相同模块 ID 会幂等更新，并清理不再声明的权限与资源。</p><button class="btn-primary" type="submit">${icon('save')}注册或更新</button></div></form>`); $('#module-register-form').onsubmit=submitModuleRegister; refreshIcons(); }
-async function submitModuleRegister(event) { event.preventDefault(); const form=new FormData(event.currentTarget); const button=$('button[type="submit"]',event.currentTarget); try { setLoading(button,true,'注册或更新'); const body={module_id:form.get('module_id'),module_name:form.get('module_name'),description:form.get('description')||undefined,permissions:parseJson(String(form.get('permissions')),'权限定义 JSON',[]),apis:parseJson(String(form.get('apis')),'API 元数据 JSON',[]),resources:parseJson(String(form.get('resources')),'资源定义 JSON',[]),metadata:parseJson(String(form.get('metadata')),'metadata JSON',{})}; await api('/api/modules/register',{method:'POST',body:JSON.stringify(body)}); setToast('模块已同步到 AuthHub'); setPage('modules'); } catch(error) { setNotice(error.message); } finally { setLoading(button,false,'注册或更新'); } }
-async function renderUsers() { const data=await api('/api/users'); $('#content').innerHTML=pageHeader('用户',button('新增用户','new-user','user-plus','primary'))+`<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs"><i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i><input id="user-filter" class="field pl-9" placeholder="筛选用户名或邮箱"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${data.items.length} 个用户</span></div>`+table(['用户','邮箱','状态','角色','操作'],data.items.map(user=>`<tr data-user-row="${user.id}"><td><div class="font-medium text-slate-800">${esc(user.display_name||user.username)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(user.username)}</div></td><td class="text-slate-500">${esc(user.email||'-')}</td><td>${user.is_super_admin?badge('系统管理员','blue'):status(user.enabled)}</td><td><button class="font-medium text-brand-600 hover:text-brand-700" data-action="user-roles:${user.id}">配置角色</button></td><td><div class="flex items-center justify-end">${user.is_super_admin?'':button(user.enabled?'停用':'启用',`user-toggle:${user.id}:${!user.enabled}`,'power')}</div></td></tr>`),'暂无用户'); $('#user-filter').oninput=event=>{const value=event.target.value.toLowerCase(); $$('[data-user-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(value)));}; bindActions(); refreshIcons(); }
-function showNewUser() { const el=openModal('新增用户',`<form id="new-user-form" class="grid gap-4 sm:grid-cols-2"><div><label class="label">用户名 <span class="text-rose-600">*</span></label><input class="field" name="username" required></div><div><label class="label">显示名称</label><input class="field" name="display_name"></div><div><label class="label">邮箱</label><input class="field" name="email" type="email"></div><div><label class="label">初始密码 <span class="text-rose-600">*</span></label><input class="field" name="password" type="password" required></div><div class="col-span-full mt-2 flex justify-end gap-2 border-t border-slate-100 pt-4"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('user-plus')}创建用户</button></div></form>`); $('#form-cancel',el).onclick=()=>el.close(); $('#new-user-form',el).onsubmit=async event=>{event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget); try {setLoading(button,true,'创建用户');await api('/api/users',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))});el.close();setToast('用户已创建');renderUsers();}catch(error){setNotice(error.message);}finally{setLoading(button,false,'创建用户');}}; }
-async function showUserRoles(userId) { const [roles,assigned]=await Promise.all([api('/api/roles'),api(`/api/users/${userId}/roles`)]); const assignedIds=new Set(assigned.items.map(role=>role.id)); const el=openModal('配置用户角色',`<div class="divide-y divide-slate-100">${roles.items.map(role=>`<label class="flex cursor-pointer items-center gap-3 py-3 text-sm"><input class="h-4 w-4 rounded border-slate-300 text-brand-600" type="checkbox" data-role="${role.id}" ${assignedIds.has(role.id)?'checked':''}><span class="font-medium text-slate-700">${esc(role.name)}</span><span class="font-mono text-xs text-slate-400">${esc(role.code)}</span></label>`).join('')||empty('尚无角色，请先创建角色')}</div><div class="mt-4 flex justify-end border-t border-slate-100 pt-4"><button id="save-user-roles" class="btn-primary">${icon('save')}保存</button></div>`); $('#save-user-roles',el).onclick=async event=>{const button=event.currentTarget; try {setLoading(button,true,'保存'); const selected=new Set($$('[data-role]:checked',el).map(input=>input.dataset.role)); await Promise.all(roles.items.map(role=>selected.has(role.id)===assignedIds.has(role.id)?null:api(`/api/users/${userId}/roles/${role.id}`,{method:selected.has(role.id)?'POST':'DELETE'})));el.close();setToast('用户角色已更新');renderUsers();}catch(error){setNotice(error.message);}finally{setLoading(button,false,'保存');}}; }
-async function renderOrganizations() { const data=await api('/api/organizations'); const flatten=(items,depth=0)=>items.flatMap(item=>[[item,depth],...flatten(item.children||[],depth+1)]); const rows=flatten(data.tree).map(([org,depth])=>`<tr><td><div class="flex items-center" style="padding-left:${depth*20}px">${depth?'<span class="mr-2 text-slate-300">└</span>':''}<span class="font-medium text-slate-800">${esc(org.name)}</span></div></td><td class="text-slate-500">${esc(org.description||'-')}</td><td>${status(org.enabled)}</td><td><div class="flex justify-end">${button('编辑',`org-edit:${org.id}`,'pencil')}</div></td></tr>`); $('#content').innerHTML=pageHeader('组织',button('新增组织','new-org','plus','primary'))+table(['组织名称','描述','状态','操作'],rows,'暂无组织'); state.organizations=data.items; bindActions(); refreshIcons(); }
-function showOrganization(id='') { const organizations=state.organizations||[]; const current=organizations.find(item=>item.id===id)||{}; const el=openModal(id?'编辑组织':'新增组织',`<form id="organization-form" class="space-y-4"><div><label class="label">组织名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required value="${esc(current.name||'')}"></div><div><label class="label">上级组织</label><select class="field" name="parent_id"><option value="">根组织</option>${organizations.filter(item=>item.id!==id).map(item=>`<option value="${esc(item.id)}" ${current.parent_id===item.id?'selected':''}>${esc(item.name)}</option>`).join('')}</select></div><div><label class="label">描述</label><textarea class="field" name="description">${esc(current.description||'')}</textarea></div><label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="enabled" ${current.enabled===false?'':'checked'}> 启用组织</label><div class="flex justify-between border-t border-slate-100 pt-4"><span>${id?button('删除',`org-delete:${id}`,'trash-2','danger'):''}</span><span class="flex gap-2"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存</button></span></div></form>`); $('#form-cancel',el).onclick=()=>el.close(); $('#organization-form',el).onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget);const body={name:form.get('name'),parent_id:form.get('parent_id')||null,description:form.get('description')||null,enabled:form.has('enabled')};try{await api(id?`/api/organizations/${id}`:'/api/organizations',{method:id?'PATCH':'POST',body:JSON.stringify(body)});el.close();setToast('组织已保存');renderOrganizations();}catch(error){setNotice(error.message);}}; $('[data-action^="org-delete"]',el)?.addEventListener('click',async()=>{if(await ask('删除组织','仅无子组织的组织可以删除。')){await api(`/api/organizations/${id}`,{method:'DELETE'});el.close();setToast('组织已删除');renderOrganizations();}}); }
-async function renderRoles() { const data=await api('/api/roles'); $('#content').innerHTML=pageHeader('角色',button('新增角色','new-role','plus','primary'))+table(['角色','描述','状态','权限','操作'],data.items.map(role=>`<tr><td><div class="font-medium text-slate-800">${esc(role.name)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(role.code)}</div></td><td class="max-w-[280px] truncate text-slate-500">${esc(role.description||'-')}</td><td>${role.built_in?badge('内置角色','blue'):status(role.enabled)}</td><td><button data-action="role-permissions:${role.id}" class="font-medium text-brand-600 hover:text-brand-700">配置权限</button></td><td><div class="flex justify-end">${role.built_in?'':button('删除',`role-delete:${role.id}`,'trash-2')}</div></td></tr>`),'暂无角色'); bindActions(); refreshIcons(); }
-function showNewRole() { const el=openModal('新增角色',`<form id="new-role-form" class="space-y-4"><div><label class="label">角色编码 <span class="text-rose-600">*</span></label><input class="field" name="code" required placeholder="例如 dataset-reader"></div><div><label class="label">角色名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required></div><div><label class="label">描述</label><textarea class="field" name="description"></textarea></div><div class="flex justify-end gap-2 border-t border-slate-100 pt-4"><button type="button" id="form-cancel" class="btn-secondary">取消</button><button class="btn-primary">${icon('plus')}创建角色</button></div></form>`); $('#form-cancel',el).onclick=()=>el.close(); $('#new-role-form',el).onsubmit=async event=>{event.preventDefault();try{await api('/api/roles',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))});el.close();setToast('角色已创建');renderRoles();}catch(error){setNotice(error.message);}}; }
-async function showRolePermissions(roleId) { const [permissions,assigned]=await Promise.all([api('/api/permissions'),api(`/api/roles/${roleId}/permissions`)]); const assignedCodes=new Set(assigned.items.map(item=>item.code)); const el=openModal('配置角色权限',`<div class="mb-3 relative"><i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i><input id="permission-filter" class="field pl-9" placeholder="筛选权限"></div><div id="permission-options" class="max-h-[420px] overflow-y-auto divide-y divide-slate-100">${permissions.items.map(permission=>`<label class="permission-option flex cursor-pointer items-center gap-3 py-2.5 text-sm"><input class="h-4 w-4 rounded border-slate-300 text-brand-600" type="checkbox" data-permission="${esc(permission.code)}" ${assignedCodes.has(permission.code)?'checked':''} ${permission.enabled?'':'disabled'}><span class="min-w-0 flex-1"><span class="block font-medium text-slate-700">${esc(permission.name)}</span><span class="font-mono text-xs text-slate-400">${esc(permission.code)}</span></span>${permission.enabled?badge('启用','active'):badge('停用','muted')}</label>`).join('')||empty('暂无权限，请先注册模块或新增权限')}</div><div class="mt-4 flex justify-end border-t border-slate-100 pt-4"><button id="save-role-permissions" class="btn-primary">${icon('save')}保存</button></div>`); $('#permission-filter',el).oninput=event=>{const value=event.target.value.toLowerCase();$$('.permission-option',el).forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(value)));}; $('#save-role-permissions',el).onclick=async event=>{const button=event.currentTarget;try{setLoading(button,true,'保存');const selected=new Set($$('[data-permission]:checked',el).map(input=>input.dataset.permission));await Promise.all(permissions.items.filter(p=>p.enabled).map(permission=>selected.has(permission.code)===assignedCodes.has(permission.code)?null:api(`/api/roles/${roleId}/permissions/${encodeURIComponent(permission.code)}`,{method:selected.has(permission.code)?'POST':'DELETE'})));el.close();setToast('角色权限已更新');renderRoles();}catch(error){setNotice(error.message);}finally{setLoading(button,false,'保存');}}; refreshIcons(); }
-async function renderPermissions() { const data=await api('/api/permissions'); state.permissions=data.items; $('#content').innerHTML=pageHeader('权限',button('新增权限','new-permission','plus','primary'))+`<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs"><i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i><input id="permission-list-filter" class="field pl-9" placeholder="筛选权限标识或名称"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${data.items.length} 项权限</span></div>`+table(['权限','模块','类型','状态','操作'],data.items.map(permission=>`<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(permission.code)}</div></td><td class="text-slate-500">${esc(permission.module_id||'系统')}</td><td>${badge(permission.kind,'blue')}</td><td>${status(permission.enabled)}</td><td><div class="flex justify-end">${button('编辑',`permission-edit:${encodeURIComponent(permission.code)}`,'pencil')}</div></td></tr>`),'暂无权限'); $('#permission-list-filter').oninput=event=>{const value=event.target.value.toLowerCase();$$('[data-permission-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(value)));}; bindActions(); refreshIcons(); }
-function showPermission(code='') { const current=code ? (state.permissions||[]).find(item=>item.code===decodeURIComponent(code))||{} : {}; const el=openModal(code?'编辑权限':'新增权限',`<form id="permission-form" class="space-y-4"><div><label class="label">权限标识 <span class="text-rose-600">*</span></label><input class="field font-mono" name="code" required ${code?'disabled':''} value="${esc(current.code||'')}" placeholder="例如 mcp:tool:execute"></div><div><label class="label">权限名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required value="${esc(current.name||'')}"></div><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">类型</label><select class="field" name="kind"><option value="operation" ${current.kind==='operation'?'selected':''}>操作</option><option value="api" ${current.kind==='api'?'selected':''}>API</option><option value="resource" ${current.kind==='resource'?'selected':''}>资源</option></select></div><label class="mt-6 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="enabled" ${current.enabled===false?'':'checked'}> 启用权限</label></div><div><label class="label">描述</label><textarea class="field" name="description">${esc(current.description||'')}</textarea></div><div><label class="label">Metadata JSON</label><textarea class="field font-mono text-xs" name="metadata">${esc(jsonPretty(current.metadata||{}))}</textarea></div><div class="flex justify-end gap-2 border-t border-slate-100 pt-4"><button type="button" id="form-cancel" class="btn-secondary">取消</button><button class="btn-primary">${icon('save')}保存</button></div></form>`); $('#form-cancel',el).onclick=()=>el.close(); $('#permission-form',el).onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget);try{const body={name:form.get('name'),description:form.get('description')||undefined,enabled:form.has('enabled'),metadata:parseJson(String(form.get('metadata')),'Metadata JSON',{})};if(!code){body.code=form.get('code');body.kind=form.get('kind');}await api(code?`/api/permissions/${code}`:'/api/permissions',{method:code?'PATCH':'POST',body:JSON.stringify(body)});el.close();setToast('权限已保存');renderPermissions();}catch(error){setNotice(error.message);}}; }
-async function renderModules() { const [modules,resources]=await Promise.all([api('/api/modules'),api('/api/resources')]); const resourceCount=resources.items.reduce((result,item)=>({...result,[item.module_id]:(result[item.module_id]||0)+1}),{}); $('#content').innerHTML=pageHeader('业务模块',button('注册模块','goto:module-register','plug-zap','primary'))+table(['模块','描述','权限','API','资源','操作'],modules.items.map(item=>`<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(item.id)}</div></td><td class="max-w-[320px] truncate text-slate-500">${esc(item.description||'-')}</td><td>${item.permissions.length}</td><td>${item.apis.length}</td><td>${resourceCount[item.id]||0}</td><td><div class="flex justify-end">${button('删除',`module-delete:${item.id}`,'trash-2')}</div></td></tr>`),'暂无已注册模块'); bindActions(); refreshIcons(); }
-async function renderResources() { const data=await api('/api/resources'); $('#content').innerHTML=pageHeader('资源')+table(['资源','资源类型','资源键','模块','Metadata'],data.items.map(item=>`<tr><td class="font-medium text-slate-800">${esc(item.name)}</td><td>${badge(item.resource_type,'blue')}</td><td class="font-mono text-xs text-slate-600">${esc(item.resource_key)}</td><td class="font-mono text-xs text-slate-500">${esc(item.module_id||'-')}</td><td><span title="${esc(jsonPretty(item.metadata))}" class="font-mono text-xs text-slate-500">${esc(JSON.stringify(item.metadata||{}).slice(0,52))}</span></td></tr>`),'暂无资源，请通过模块注册同步'); }
-async function renderAudit() { const data=await api('/api/audit-events?limit=100'); $('#content').innerHTML=pageHeader('审计日志')+`<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs"><i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i><input id="audit-filter" class="field pl-9" placeholder="筛选动作、对象或执行人"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">最近 ${data.items.length} 条</span></div>`+table(['时间','动作','执行人','目标','结果'],data.items.map(item=>`<tr data-audit-row><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(item.occurred_at).toLocaleString())}</td><td class="font-mono text-xs text-slate-700">${esc(item.action)}</td><td class="font-mono text-xs text-slate-500">${esc(item.actor_id||'-')}</td><td><span class="text-slate-600">${esc(item.target_type)}</span><span class="ml-1 font-mono text-xs text-slate-400">${esc(item.target_id||'')}</span></td><td>${badge(item.outcome,item.outcome==='success'||item.outcome==='allowed'?'active':'danger')}</td></tr>`),'暂无审计记录'); $('#audit-filter').oninput=event=>{const value=event.target.value.toLowerCase();$$('[data-audit-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(value)));}; refreshIcons(); }
-async function performAction(action) { const [kind,...parts]=action.split(':'); if(kind==='goto') return setPage(parts.join(':')); if(kind==='new-user') return showNewUser(); if(kind==='new-org') return showOrganization(); if(kind==='new-role') return showNewRole(); if(kind==='new-permission') return showPermission(); if(kind==='user-roles') return showUserRoles(parts[0]); if(kind==='role-permissions') return showRolePermissions(parts[0]); if(kind==='org-edit') return showOrganization(parts[0]); if(kind==='permission-edit') return showPermission(parts.join(':')); if(kind==='user-toggle'){const userId=parts[0],enabled=parts[1]==='true';try{await api(`/api/users/${userId}`,{method:'PATCH',body:JSON.stringify({enabled})});setToast(enabled?'用户已启用':'用户已停用');renderUsers();}catch(error){setNotice(error.message);}return;} if(kind==='role-delete'){if(await ask('删除角色','删除后会解除该角色与用户、权限的关系。')){try{await api(`/api/roles/${parts[0]}`,{method:'DELETE'});setToast('角色已删除');renderRoles();}catch(error){setNotice(error.message);}}return;} if(kind==='module-delete'){if(await ask('删除业务模块','删除后将移除该模块声明的权限与资源。')){try{await api(`/api/modules/${parts[0]}`,{method:'DELETE'});setToast('业务模块已删除');renderModules();}catch(error){setNotice(error.message);}}} }
-function bindActions() { $$('[data-action]').forEach(element=>element.onclick=()=>performAction(element.dataset.action)); }
-async function render() { clearNotice(); $('#content').innerHTML=`<div class="grid gap-3"><div class="skeleton h-7 w-32"></div><div class="surface p-5"><div class="skeleton h-9 w-full"></div><div class="mt-3 skeleton h-9 w-full"></div><div class="mt-3 skeleton h-9 w-3/4"></div></div></div>`; try { await ({overview:renderOverview,authorize:renderAuthorize,'module-register':renderModuleRegister,users:renderUsers,organizations:renderOrganizations,roles:renderRoles,permissions:renderPermissions,modules:renderModules,resources:renderResources,audit:renderAudit}[state.page])(); } catch(error) { $('#content').innerHTML=panel(`<div class="flex min-h-[240px] flex-col items-center justify-center p-6 text-center"><div class="mb-3 grid h-10 w-10 place-items-center rounded-full bg-rose-50 text-rose-600">${icon('circle-alert')}</div><p class="text-sm font-medium text-slate-700">无法加载此页面</p><p class="mt-1 text-sm text-slate-500">${esc(error.message)}</p><button id="retry" class="btn-secondary mt-4">${icon('refresh-cw')}重试</button></div>`); $('#retry').onclick=render; refreshIcons(); } }
-async function initialize() { if(!state.token) return; try { state.me=await api('/api/auth/me'); if(!state.me.is_super_admin) throw new Error('当前账户不是系统管理员'); $('#current-user').textContent=state.me.display_name||state.me.username; $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden'); await render(); } catch(error) { state.token=null;sessionStorage.removeItem('authhub.token');$('#login-view').classList.remove('hidden');const alert=$('#login-error');alert.classList.remove('hidden');$('span',alert).textContent=error.message;refreshIcons(); } }
-$('#login-form').onsubmit=async event=>{event.preventDefault();const error=$('#login-error');error.classList.add('hidden');const button=$('#login-submit');try{setLoading(button,true,'登录');const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))});state.token=data.access_token;sessionStorage.setItem('authhub.token',state.token);await initialize();}catch(reason){error.classList.remove('hidden');$('span',error).textContent=reason.message;refreshIcons();}finally{setLoading(button,false,'登录');}};
-$('#toggle-password').onclick=()=>{const field=$('#password');field.type=field.type==='password'?'text':'password';$('#toggle-password').title=field.type==='password'?'显示密码':'隐藏密码';$('#toggle-password').innerHTML=icon(field.type==='password'?'eye':'eye-off');refreshIcons();};
-$('#logout-button').onclick=async()=>{try{await api('/api/auth/logout',{method:'POST'});}finally{state.token=null;sessionStorage.removeItem('authhub.token');location.reload();}};
-$('#menu-button').onclick=()=>{$('#sidebar').classList.add('open');$('#sidebar-backdrop').classList.remove('hidden');}; $('#sidebar-backdrop').onclick=()=>{$('#sidebar').classList.remove('open');$('#sidebar-backdrop').classList.add('hidden');};
-$$('.nav-item').forEach(item=>item.onclick=()=>setPage(item.dataset.page));
-initialize(); refreshIcons();
+const badge = (label, type = 'muted') => `<span class="status status-${type}">${esc(label)}</span>`;
+const status = enabled => enabled ? badge('启用', 'active') : badge('已停用', 'muted');
+const button = (label, action, name, tone = 'icon') => tone === 'icon'
+  ? `<button type="button" class="btn-icon" title="${esc(label)}" data-action="${esc(action)}">${icon(name)}</button>`
+  : `<button type="button" class="btn-${tone}" data-action="${esc(action)}">${icon(name)}${esc(label)}</button>`;
+const panel = (body, cls = '') => `<section class="surface ${cls}">${body}</section>`;
+const empty = (text, action = '') => `<div class="flex min-h-[210px] flex-col items-center justify-center px-5 text-center"><div class="mb-3 grid h-10 w-10 place-items-center rounded-full bg-slate-100 text-slate-400">${icon('inbox')}</div><p class="text-sm text-slate-500">${esc(text)}</p>${action}</div>`;
+const table = (headers, rows, emptyText = '暂无数据') => panel(`<div class="overflow-x-auto"><table class="data-table"><thead><tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}">${empty(emptyText)}</td></tr>`}</tbody></table></div>`);
+const pageHeader = (title, controls = '') => `<div class="mb-5 flex min-h-[34px] items-center justify-between gap-3"><h1 class="text-[22px] font-semibold leading-none text-slate-900">${esc(title)}</h1><div class="flex shrink-0 items-center gap-2">${controls}</div></div>`;
+const resourceLabel = value => resourceTypes[value] || value || '-';
+const actionLabel = value => actionLabels[value] || value || '-';
+
+function setToast(message, type = 'success') {
+  const el = $('#toast');
+  el.textContent = message;
+  el.className = `pointer-events-none fixed bottom-5 right-5 z-50 max-w-sm rounded-lg border px-3 py-2 text-sm shadow-float ${type === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-white text-emerald-800'}`;
+  clearTimeout(setToast.timer);
+  setToast.timer = setTimeout(() => el.classList.add('hidden'), 3300);
+}
+
+function setNotice(message, type = 'error') {
+  const el = $('#notice');
+  el.innerHTML = `<div class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${type === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}">${icon(type === 'error' ? 'circle-alert' : 'circle-check', 'mt-0.5 h-4 w-4 shrink-0')}<span>${esc(message)}</span></div>`;
+  el.classList.remove('hidden');
+  refreshIcons();
+}
+
+function clearNotice() { $('#notice').innerHTML = ''; $('#notice').classList.add('hidden'); }
+
+async function api(path, options = {}) {
+  const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) };
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  const response = await fetch(path, { ...options, headers });
+  const body = response.status === 204 ? {} : await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || body.code || `请求失败（${response.status}）`);
+  return body;
+}
+
+function setLoading(element, loading, label) {
+  element.disabled = loading;
+  element.innerHTML = loading ? `${icon('loader-circle', 'animate-spin')}处理中…` : `${icon('check')}${esc(label)}`;
+  refreshIcons();
+}
+
+function openModal(title, body, wide = false) {
+  const el = $('#modal');
+  el.className = `modal ${wide ? 'max-w-3xl' : ''}`;
+  el.innerHTML = `<div class="flex h-14 items-center justify-between border-b border-slate-200 px-5"><h2 class="text-[15px] font-semibold text-slate-900">${esc(title)}</h2><button type="button" class="btn-icon" id="modal-close" title="关闭">${icon('x')}</button></div><div class="modal-body p-5">${body}</div>`;
+  el.showModal();
+  $('#modal-close').onclick = () => el.close();
+  refreshIcons();
+  return el;
+}
+
+function ask(title, message, confirmLabel = '确认删除') {
+  return new Promise(resolve => {
+    const el = $('#confirm-modal');
+    el.innerHTML = `<div class="p-5"><div class="mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-rose-50 text-rose-600">${icon('triangle-alert')}</div><h2 class="text-[15px] font-semibold text-slate-900">${esc(title)}</h2><p class="mt-2 text-sm leading-6 text-slate-500">${esc(message)}</p><div class="mt-6 flex justify-end gap-2"><button type="button" id="confirm-cancel" class="btn-secondary">取消</button><button type="button" id="confirm-yes" class="btn-danger">${esc(confirmLabel)}</button></div></div>`;
+    el.showModal();
+    $('#confirm-cancel').onclick = () => { el.close(); resolve(false); };
+    $('#confirm-yes').onclick = () => { el.close(); resolve(true); };
+    refreshIcons();
+  });
+}
+
+function setPage(page) {
+  state.page = page;
+  $('#shell-title').textContent = pages[page];
+  $('#shell-context').textContent = 'AuthHub';
+  $$('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === page));
+  $('#sidebar').classList.remove('open');
+  $('#sidebar-backdrop').classList.add('hidden');
+  render();
+}
+
+function selectionList(items, inputName, selected = new Set(), value = item => item.id, text = item => item.name) {
+  if (!items.length) return '<p class="selection-list-empty">暂无可选项</p>';
+  return `<div class="selection-list">${items.map(item => `<label><input type="checkbox" name="${esc(inputName)}" value="${esc(value(item))}" ${selected.has(value(item)) ? 'checked' : ''}><span>${esc(text(item))}</span></label>`).join('')}</div>`;
+}
+
+async function renderOverview() {
+  const [overview, audit] = await Promise.all([api('/api/admin/overview'), api('/api/audit-events?limit=8')]);
+  const metrics = [['用户', overview.users, 'users', 'blue'], ['组织', overview.organizations, 'network', 'warning'], ['角色', overview.roles, 'key-round', 'active'], ['权限', overview.permissions, 'key-square', 'blue'], ['模块', overview.modules, 'boxes', 'warning'], ['资源', overview.resources, 'database-zap', 'active']];
+  const rows = audit.items.map(event => `<tr><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(event.occurred_at).toLocaleString())}</td><td class="font-mono text-xs text-slate-700">${esc(event.action)}</td><td class="text-slate-500">${esc(event.target_type)} ${esc(event.target_id || '')}</td><td>${badge(event.outcome, event.outcome === 'success' || event.outcome === 'allowed' ? 'active' : 'danger')}</td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('概览', `${button('权限校验', 'goto:authorize', 'badge-check', 'secondary')}${button('新增业务模块', 'new-module', 'plus', 'primary')}`)
+    + `<div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">${metrics.map(([label, value, name, tone]) => `<div class="surface min-w-0 px-4 py-3"><div class="flex items-center justify-between"><span class="text-xs font-medium text-slate-500">${label}</span><span class="grid h-7 w-7 place-items-center rounded-lg ${tone === 'active' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'}">${icon(name, 'h-4 w-4')}</span></div><div class="mt-2 text-2xl font-semibold leading-none text-slate-900">${value}</div></div>`).join('')}</div>`
+    + `<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"><section class="surface overflow-hidden"><div class="flex h-12 items-center justify-between border-b border-slate-100 px-4"><h2 class="text-sm font-semibold text-slate-800">最近审计</h2><button type="button" class="text-sm font-medium text-brand-600 hover:text-brand-700" data-action="goto:audit">查看全部</button></div><div class="overflow-x-auto"><table class="data-table"><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>结果</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${empty('暂无审计记录')}</td></tr>`}</tbody></table></div></section><section class="surface p-4"><h2 class="text-sm font-semibold text-slate-800">配置入口</h2><div class="mt-3 divide-y divide-slate-100"><button type="button" data-action="goto:modules" class="overview-link"><span>${icon('boxes', 'h-4 w-4')} 新增业务模块</span>${icon('chevron-right', 'h-4 w-4')}</button><button type="button" data-action="goto:resources" class="overview-link"><span>${icon('database-zap', 'h-4 w-4')} 建立受控资源</span>${icon('chevron-right', 'h-4 w-4')}</button><button type="button" data-action="goto:permissions" class="overview-link"><span>${icon('key-square', 'h-4 w-4')} 配置资源操作权限</span>${icon('chevron-right', 'h-4 w-4')}</button></div></section></div>`;
+  bindActions();
+  refreshIcons();
+}
+
+async function renderAuthorize() {
+  $('#content').innerHTML = pageHeader('权限校验') + panel(`<form id="check-form" class="grid gap-4 p-5 md:grid-cols-[1fr_1fr_auto]"><div><label class="label">权限标识 <span class="text-rose-600">*</span></label><input class="field" name="permission" required placeholder="由服务或 SDK 使用的权限编码"></div><div><label class="label">资源上下文</label><input class="field" name="resource" placeholder="可选，例如订单号或 Server 名称"></div><div class="self-end"><button class="btn-primary" type="submit">${icon('badge-check')}执行校验</button></div></form><div id="check-result" class="hidden border-t border-slate-100 px-5 py-4"></div>`);
+  $('#check-form').onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '执行校验');
+      const result = await api('/api/auth/check', { method: 'POST', body: JSON.stringify({ permission: form.get('permission'), resource: form.get('resource') || undefined }) });
+      const el = $('#check-result');
+      el.classList.remove('hidden');
+      el.innerHTML = `<div class="flex items-center justify-between"><span class="text-sm font-medium text-slate-800">校验结果</span>${result.allowed ? badge('允许', 'active') : badge(result.reason || '拒绝', result.authenticated ? 'danger' : 'warning')}</div>`;
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '执行校验'); }
+  };
+  refreshIcons();
+}
+
+async function renderUsers() {
+  const [users, organizations, roles] = await Promise.all([api('/api/users'), api('/api/organizations'), api('/api/roles')]);
+  const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
+  const roleNames = Object.fromEntries(roles.items.map(item => [item.id, item.name]));
+  const rows = users.items.map(user => {
+    const assignedNames = (user.role_ids || []).map(id => roleNames[id] || id).join('、') || '-';
+    return `<tr data-user-row="${esc(user.id)}"><td><div class="font-medium text-slate-800">${esc(user.display_name || user.username)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(user.username)}</div></td><td class="max-w-[220px] truncate text-slate-500">${(user.organization_ids || []).map(id => esc(organizationNames[id] || id)).join('、') || '-'}</td><td class="max-w-[220px] truncate text-slate-500">${esc(assignedNames)}</td><td>${user.is_super_admin ? badge('系统管理员', 'blue') : status(user.enabled)}</td><td><div class="flex justify-end gap-1">${button('配置组织', `user-organizations:${user.id}`, 'network')}${button('配置角色', `user-roles:${user.id}`, 'key-round')}${user.is_super_admin ? '' : button(user.enabled ? '停用' : '启用', `user-toggle:${user.id}:${!user.enabled}`, 'power')}</div></td></tr>`;
+  });
+  $('#content').innerHTML = pageHeader('用户', button('新增用户', 'new-user', 'user-plus', 'primary'))
+    + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="user-filter" class="field pl-9" placeholder="筛选用户名、组织或角色"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${users.items.length} 个用户</span></div>`
+    + table(['用户', '所属组织', '已分配角色', '状态', '操作'], rows.join(''), '暂无用户');
+  $('#user-filter').oninput = event => {
+    const value = event.target.value.toLowerCase();
+    $$('[data-user-row]').forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
+  };
+  bindActions();
+  refreshIcons();
+}
+
+async function showNewUser() {
+  const [roles, organizations] = await Promise.all([api('/api/roles'), api('/api/organizations')]);
+  const el = openModal('新增用户', `<form id="new-user-form" class="space-y-5"><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">用户名 <span class="text-rose-600">*</span></label><input class="field" name="username" required></div><div><label class="label">显示名称</label><input class="field" name="display_name"></div><div class="sm:col-span-2"><label class="label">初始密码 <span class="text-rose-600">*</span></label><input class="field" name="password" type="password" required></div></div><div><span class="label">所属组织</span>${selectionList(organizations.items, 'organization_ids')}</div><div><span class="label">初始角色</span>${selectionList(roles.items.filter(role => role.enabled), 'role_ids')}</div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('user-plus')}创建用户</button></div></form>`);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#new-user-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '创建用户');
+      await api('/api/users', { method: 'POST', body: JSON.stringify({ username: form.get('username'), display_name: form.get('display_name'), password: form.get('password'), organization_ids: form.getAll('organization_ids'), role_ids: form.getAll('role_ids') }) });
+      el.close(); setToast('用户已创建'); renderUsers();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '创建用户'); }
+  };
+}
+
+async function showUserRoles(userId) {
+  const [roles, assigned] = await Promise.all([api('/api/roles'), api(`/api/users/${userId}/roles`)]);
+  const assignedIds = new Set(assigned.items.map(role => role.id));
+  const el = openModal('配置用户角色', `<form id="user-roles-form" class="space-y-5"><div>${selectionList(roles.items.filter(role => role.enabled), 'role_ids', assignedIds)}</div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存角色</button></div></form>`);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#user-roles-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const selected = new Set(new FormData(event.currentTarget).getAll('role_ids'));
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '保存角色');
+      await Promise.all(roles.items.map(role => selected.has(role.id) === assignedIds.has(role.id) ? null : api(`/api/users/${userId}/roles/${role.id}`, { method: selected.has(role.id) ? 'POST' : 'DELETE' })));
+      el.close(); setToast('用户角色已更新'); renderUsers();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '保存角色'); }
+  };
+}
+
+async function showUserOrganizations(userId) {
+  const [organizations, assigned] = await Promise.all([api('/api/organizations'), api(`/api/users/${userId}/organizations`)]);
+  const assignedIds = new Set(assigned.items.map(organization => organization.id));
+  const el = openModal('配置用户组织', `<form id="user-organizations-form" class="space-y-5"><div>${selectionList(organizations.items.filter(org => org.enabled), 'organization_ids', assignedIds)}</div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存组织</button></div></form>`);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#user-organizations-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const selected = new Set(new FormData(event.currentTarget).getAll('organization_ids'));
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '保存组织');
+      await Promise.all(organizations.items.map(org => selected.has(org.id) === assignedIds.has(org.id) ? null : api(`/api/users/${userId}/organizations/${org.id}`, { method: selected.has(org.id) ? 'POST' : 'DELETE' })));
+      el.close(); setToast('用户组织已更新'); renderUsers();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '保存组织'); }
+  };
+}
+
+async function renderOrganizations() {
+  const data = await api('/api/organizations');
+  const flatten = (items, depth = 0) => items.flatMap(item => [[item, depth], ...flatten(item.children || [], depth + 1)]);
+  const rows = flatten(data.tree).map(([org, depth]) => `<tr><td><div class="flex items-center" style="padding-left:${depth * 20}px">${depth ? '<span class="mr-2 text-slate-300">└</span>' : ''}<span class="font-medium text-slate-800">${esc(org.name)}</span></div></td><td class="text-slate-500">${esc(org.description || '-')}</td><td>${status(org.enabled)}</td><td><div class="flex justify-end">${button('编辑', `org-edit:${org.id}`, 'pencil')}</div></td></tr>`).join('');
+  state.organizations = data.items;
+  $('#content').innerHTML = pageHeader('组织', button('新增组织', 'new-org', 'plus', 'primary')) + table(['组织名称', '描述', '状态', '操作'], rows, '暂无组织');
+  bindActions(); refreshIcons();
+}
+
+function showOrganization(id = '') {
+  const organizations = state.organizations || [];
+  const current = organizations.find(item => item.id === id) || {};
+  const el = openModal(id ? '编辑组织' : '新增组织', `<form id="organization-form" class="space-y-4"><div><label class="label">组织名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required value="${esc(current.name || '')}"></div><div><label class="label">上级组织</label><select class="field" name="parent_id"><option value="">根组织</option>${organizations.filter(item => item.id !== id).map(item => `<option value="${esc(item.id)}" ${current.parent_id === item.id ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></div><div><label class="label">描述</label><textarea class="field" name="description">${esc(current.description || '')}</textarea></div><label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="enabled" ${current.enabled === false ? '' : 'checked'}> 启用组织</label><div class="modal-footer justify-between"><span>${id ? button('删除', `org-delete:${id}`, 'trash-2', 'danger') : ''}</span><span class="flex gap-2"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存</button></span></div></form>`);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#organization-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await api(id ? `/api/organizations/${id}` : '/api/organizations', { method: id ? 'PATCH' : 'POST', body: JSON.stringify({ name: form.get('name'), parent_id: form.get('parent_id') || null, description: form.get('description') || null, enabled: form.has('enabled') }) });
+      el.close(); setToast('组织已保存'); renderOrganizations();
+    } catch (error) { setNotice(error.message); }
+  };
+  $('[data-action^="org-delete"]', el)?.addEventListener('click', async () => {
+    if (await ask('删除组织', '仅无子组织的组织可以删除。')) { await api(`/api/organizations/${id}`, { method: 'DELETE' }); el.close(); setToast('组织已删除'); renderOrganizations(); }
+  });
+}
+
+async function renderRoles() {
+  const data = await api('/api/roles');
+  const rows = data.items.map(role => `<tr><td><div class="font-medium text-slate-800">${esc(role.name)}</div></td><td class="max-w-[280px] truncate text-slate-500">${esc(role.description || '-')}</td><td>${role.built_in ? badge('内置角色', 'blue') : status(role.enabled)}</td><td><button type="button" data-action="role-permissions:${role.id}" class="font-medium text-brand-600 hover:text-brand-700">配置权限</button></td><td><div class="flex justify-end">${role.built_in ? '' : button('删除', `role-delete:${role.id}`, 'trash-2')}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('角色', button('新增角色', 'new-role', 'plus', 'primary')) + table(['角色', '描述', '状态', '权限', '操作'], rows, '暂无角色');
+  bindActions(); refreshIcons();
+}
+
+function showNewRole() {
+  const el = openModal('新增角色', `<form id="new-role-form" class="space-y-4"><div><label class="label">角色名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如内容审核员"></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="该角色可以承担的职责"></textarea></div><div class="modal-footer"><button type="button" id="form-cancel" class="btn-secondary">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建角色</button></div></form>`);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#new-role-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '创建角色');
+      await api('/api/roles', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
+      el.close(); setToast('角色已创建'); renderRoles();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '创建角色'); }
+  };
+}
+
+async function showRolePermissions(roleId) {
+  const [permissions, assigned, modules, resources] = await Promise.all([api('/api/permissions'), api(`/api/roles/${roleId}/permissions`), api('/api/modules'), api('/api/resources')]);
+  const assignedCodes = new Set(assigned.items.map(item => item.code));
+  const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
+  const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
+  const rows = permissions.items.map(permission => `<label class="permission-option"><input type="checkbox" name="permission_codes" value="${esc(permission.code)}" ${assignedCodes.has(permission.code) ? 'checked' : ''} ${permission.enabled ? '' : 'disabled'}><span><strong>${esc(permission.name)}</strong><small>${esc(moduleNames[permission.module_id] || '系统')} · ${esc(resourceNames[permission.resource_id] || permission.resource_key || '-')} · ${esc(actionLabel(permission.action))}</small></span>${permission.enabled ? '' : badge('停用', 'muted')}</label>`).join('');
+  const el = openModal('配置角色权限', `<form id="role-permissions-form" class="space-y-4"><div class="relative">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-filter" class="field pl-9" placeholder="筛选权限、模块或资源"></div><div id="permission-options" class="selection-list selection-list-tall">${rows || '<p class="selection-list-empty">暂无权限，请先配置资源和权限。</p>'}</div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存权限</button></div></form>`, true);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#permission-filter', el).oninput = event => {
+    const value = event.target.value.toLowerCase();
+    $$('.permission-option', el).forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
+  };
+  $('#role-permissions-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const selected = new Set(new FormData(event.currentTarget).getAll('permission_codes'));
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '保存权限');
+      await Promise.all(permissions.items.filter(permission => permission.enabled).map(permission => selected.has(permission.code) === assignedCodes.has(permission.code) ? null : api(`/api/roles/${roleId}/permissions/${encodeURIComponent(permission.code)}`, { method: selected.has(permission.code) ? 'POST' : 'DELETE' })));
+      el.close(); setToast('角色权限已更新'); renderRoles();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '保存权限'); }
+  };
+}
+
+async function renderPermissions() {
+  const [permissions, modules, resources] = await Promise.all([api('/api/permissions'), api('/api/modules'), api('/api/resources')]);
+  const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
+  const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
+  const rows = permissions.items.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 text-xs text-slate-500">${esc(permission.description || '-')}</div></td><td class="text-slate-500">${esc(moduleNames[permission.module_id] || '-')}</td><td><div class="font-medium text-slate-700">${esc(resourceNames[permission.resource_id] || permission.resource_key || '-')}</div><div class="mt-0.5 text-xs text-slate-500">${esc(resourceLabel(permission.resource_type))}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${status(permission.enabled)}</td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('权限', button('新增权限', 'new-permission', 'plus', 'primary'))
+    + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选权限、模块或资源"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissions.items.length} 项权限</span></div>`
+    + table(['权限', '业务模块', '资源', '操作', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
+  $('#permission-list-filter').oninput = event => {
+    const value = event.target.value.toLowerCase();
+    $$('[data-permission-row]').forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
+  };
+  refreshIcons();
+}
+
+async function showPermission() {
+  const [modules, resources, roles] = await Promise.all([api('/api/modules'), api('/api/resources'), api('/api/roles')]);
+  const moduleOptions = modules.items.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
+  const el = openModal('新增权限', `<form id="permission-form" class="space-y-5"><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">权限名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如查看订单"></div><div><label class="label">业务模块 <span class="text-rose-600">*</span></label><select class="field" name="module_id" id="permission-module" required><option value="">请选择业务模块</option>${moduleOptions}</select></div></div><div><label class="label">资源 <span class="text-rose-600">*</span></label><select class="field" name="resource_id" id="permission-resource" required disabled><option value="">请先选择业务模块</option></select></div><div><label class="label">允许的操作 <span class="text-rose-600">*</span></label><select class="field" name="action" id="permission-action" required disabled><option value="">请先选择资源</option></select></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="说明这项操作允许做什么"></textarea></div><div><span class="label">授予角色 <span class="text-rose-600">*</span></span>${selectionList(roles.items.filter(role => role.enabled), 'role_ids')}<p class="field-help">权限创建后立即授予所选角色；后续也可在角色页调整。</p></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建权限</button></div></form>`);
+  const updateResources = () => {
+    const moduleId = $('#permission-module', el).value;
+    const select = $('#permission-resource', el);
+    const items = resources.items.filter(resource => resource.module_id === moduleId);
+    select.disabled = !moduleId;
+    select.innerHTML = `<option value="">${moduleId ? '请选择资源' : '请先选择业务模块'}</option>${items.map(item => `<option value="${esc(item.id)}">${esc(item.name)}（${esc(resourceLabel(item.resource_type))}）</option>`).join('')}`;
+    const actionSelect = $('#permission-action', el);
+    actionSelect.disabled = true;
+    actionSelect.innerHTML = '<option value="">请先选择资源</option>';
+  };
+  const updateActions = () => {
+    const resource = resources.items.find(item => item.id === $('#permission-resource', el).value);
+    const select = $('#permission-action', el);
+    const available = resource ? resourceActions[resource.resource_type] || actions : [];
+    select.disabled = !resource;
+    select.innerHTML = `<option value="">${resource ? '请选择操作' : '请先选择资源'}</option>${available.map(action => `<option value="${action}">${actionLabels[action]}</option>`).join('')}`;
+  };
+  $('#permission-module', el).onchange = updateResources;
+  $('#permission-resource', el).onchange = updateActions;
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#permission-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      if (!form.getAll('role_ids').length) throw new Error('请至少选择一个角色');
+      setLoading(buttonEl, true, '创建权限');
+      await api('/api/permissions', { method: 'POST', body: JSON.stringify({ name: form.get('name'), module_id: form.get('module_id'), resource_id: form.get('resource_id'), action: form.get('action'), description: form.get('description') || undefined, role_ids: form.getAll('role_ids') }) });
+      el.close(); setToast('权限已创建并绑定资源'); renderPermissions();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '创建权限'); }
+  };
+}
+
+async function renderModules() {
+  const [modules, resources, permissions] = await Promise.all([api('/api/modules'), api('/api/resources'), api('/api/permissions')]);
+  const resourceCount = resources.items.reduce((result, item) => ({ ...result, [item.module_id]: (result[item.module_id] || 0) + 1 }), {});
+  const permissionCount = permissions.items.reduce((result, item) => ({ ...result, [item.module_id]: (result[item.module_id] || 0) + 1 }), {});
+  const rows = modules.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td class="max-w-[380px] truncate text-slate-500">${esc(item.description || '-')}</td><td>${resourceCount[item.id] || 0}</td><td>${permissionCount[item.id] || 0}</td><td><div class="flex justify-end">${button('删除', `module-delete:${item.id}`, 'trash-2')}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('业务模块', button('新增业务模块', 'new-module', 'plus', 'primary')) + table(['业务模块', '描述', '资源', '权限', '操作'], rows, '暂无业务模块。先创建一个业务边界，再建立它的资源。');
+  bindActions(); refreshIcons();
+}
+
+function showNewModule() {
+  const el = openModal('新增业务模块', `<form id="module-form" class="space-y-5"><div><label class="label">模块名称 <span class="text-rose-600">*</span></label><input class="field" name="module_name" required placeholder="例如订单中心"></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="描述这个业务边界负责的能力"></textarea></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建模块</button></div></form>`);
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#module-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '创建模块');
+      await api('/api/modules/register', { method: 'POST', body: JSON.stringify({ module_name: form.get('module_name'), description: form.get('description') || undefined, permissions: [], apis: [], resources: [], metadata: {} }) });
+      el.close(); setToast('业务模块已创建'); renderModules();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '创建模块'); }
+  };
+}
+
+async function renderResources() {
+  const [resources, modules] = await Promise.all([api('/api/resources'), api('/api/modules')]);
+  const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
+  const rows = resources.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td>${badge(resourceLabel(item.resource_type), 'blue')}</td><td class="max-w-[260px] truncate font-mono text-xs text-slate-600">${esc(item.resource_key)}</td><td class="text-slate-500">${esc(moduleNames[item.module_id] || '-')}</td><td><div class="flex justify-end">${button('删除', `resource-delete:${item.id}`, 'trash-2')}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('资源', button('新增资源', 'new-resource', 'plus', 'primary')) + table(['资源', '资源类别', '资源标识', '业务模块', '操作'], rows, '暂无资源。资源是需要被授权的对象，必须属于一个业务模块。');
+  bindActions(); refreshIcons();
+}
+
+async function showNewResource() {
+  const modules = await api('/api/modules');
+  const moduleOptions = modules.items.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
+  const el = openModal('新增资源', `<form id="resource-form" class="space-y-4"><div><label class="label">业务模块 <span class="text-rose-600">*</span></label><select class="field" name="module_id" required><option value="">请选择业务模块</option>${moduleOptions}</select></div><div><label class="label">资源类别 <span class="text-rose-600">*</span></label><select class="field" name="resource_type" id="resource-type" required>${Object.entries(resourceTypes).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></div><div><label class="label">资源名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如订单列表接口"></div><div><label class="label">资源标识 <span class="text-rose-600">*</span></label><input class="field font-mono" id="resource-key" name="resource_key" required placeholder="例如 /orders"><p id="resource-key-help" class="field-help">API 接口请填写稳定路径；其他资源填写上游用于识别对象的稳定键。</p></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建资源</button></div></form>`);
+  const updateHint = () => {
+    const type = $('#resource-type', el).value;
+    const key = $('#resource-key', el);
+    const hints = {
+      api: ['例如 /orders', 'API 接口请填写稳定路径；HTTP 方法可由上游路由或 SDK 附加。'],
+      entity: ['例如 order', '填写业务实体或集合的稳定标识。'],
+      mcp_server: ['例如 production-server', '填写 MCP Server 的稳定标识。'],
+      mcp_tool: ['例如 search_orders', '填写 MCP Tool 的稳定名称。'],
+      page: ['例如 orders:list', '填写菜单或页面的稳定路由/标识。'],
+      custom: ['例如 warehouse-zone', '填写上游系统用于识别该对象的稳定键。']
+    };
+    key.placeholder = hints[type][0]; $('#resource-key-help', el).textContent = hints[type][1];
+  };
+  $('#resource-type', el).onchange = updateHint;
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#resource-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '创建资源');
+      await api('/api/resources', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) });
+      el.close(); setToast('资源已创建'); renderResources();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '创建资源'); }
+  };
+}
+
+async function renderAudit() {
+  const data = await api('/api/audit-events?limit=100');
+  const rows = data.items.map(item => `<tr data-audit-row><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(item.occurred_at).toLocaleString())}</td><td class="font-mono text-xs text-slate-700">${esc(item.action)}</td><td class="font-mono text-xs text-slate-500">${esc(item.actor_id || '-')}</td><td><span class="text-slate-600">${esc(item.target_type)}</span><span class="ml-1 font-mono text-xs text-slate-400">${esc(item.target_id || '')}</span></td><td>${badge(item.outcome, item.outcome === 'success' || item.outcome === 'allowed' ? 'active' : 'danger')}</td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('审计日志') + `<div class="mb-3 relative max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="audit-filter" class="field pl-9" placeholder="筛选动作、对象或执行人"></div>` + table(['时间', '动作', '执行人', '目标', '结果'], rows, '暂无审计记录');
+  $('#audit-filter').oninput = event => {
+    const value = event.target.value.toLowerCase();
+    $$('[data-audit-row]').forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
+  };
+  refreshIcons();
+}
+
+async function performAction(action) {
+  const [kind, ...parts] = action.split(':');
+  if (kind === 'goto') return setPage(parts.join(':'));
+  if (kind === 'new-user') return showNewUser();
+  if (kind === 'new-org') return showOrganization();
+  if (kind === 'new-role') return showNewRole();
+  if (kind === 'new-permission') return showPermission();
+  if (kind === 'new-module') return showNewModule();
+  if (kind === 'new-resource') return showNewResource();
+  if (kind === 'user-roles') return showUserRoles(parts[0]);
+  if (kind === 'user-organizations') return showUserOrganizations(parts[0]);
+  if (kind === 'role-permissions') return showRolePermissions(parts[0]);
+  if (kind === 'org-edit') return showOrganization(parts[0]);
+  if (kind === 'user-toggle') {
+    try { await api(`/api/users/${parts[0]}`, { method: 'PATCH', body: JSON.stringify({ enabled: parts[1] === 'true' }) }); setToast(parts[1] === 'true' ? '用户已启用' : '用户已停用'); renderUsers(); } catch (error) { setNotice(error.message); }
+    return;
+  }
+  if (kind === 'role-delete') {
+    if (await ask('删除角色', '删除后会解除该角色与用户、权限的关系。')) { try { await api(`/api/roles/${parts[0]}`, { method: 'DELETE' }); setToast('角色已删除'); renderRoles(); } catch (error) { setNotice(error.message); } }
+    return;
+  }
+  if (kind === 'resource-delete') {
+    if (await ask('删除资源', '已绑定权限的资源不能删除，请先处理对应权限。')) { try { await api(`/api/resources/${parts[0]}`, { method: 'DELETE' }); setToast('资源已删除'); renderResources(); } catch (error) { setNotice(error.message); } }
+    return;
+  }
+  if (kind === 'module-delete') {
+    if (await ask('删除业务模块', '删除后会移除该模块下的资源和权限。')) { try { await api(`/api/modules/${parts[0]}`, { method: 'DELETE' }); setToast('业务模块已删除'); renderModules(); } catch (error) { setNotice(error.message); } }
+  }
+}
+
+function bindActions() { $$('[data-action]').forEach(element => { element.onclick = () => performAction(element.dataset.action); }); }
+
+async function render() {
+  clearNotice();
+  $('#content').innerHTML = `<div class="grid gap-3"><div class="skeleton h-7 w-32"></div><div class="surface p-5"><div class="skeleton h-9 w-full"></div><div class="mt-3 skeleton h-9 w-full"></div><div class="mt-3 skeleton h-9 w-3/4"></div></div></div>`;
+  try {
+    await ({ overview: renderOverview, authorize: renderAuthorize, users: renderUsers, organizations: renderOrganizations, roles: renderRoles, permissions: renderPermissions, modules: renderModules, resources: renderResources, audit: renderAudit }[state.page])();
+  } catch (error) {
+    $('#content').innerHTML = panel(`<div class="flex min-h-[240px] flex-col items-center justify-center p-6 text-center"><div class="mb-3 grid h-10 w-10 place-items-center rounded-full bg-rose-50 text-rose-600">${icon('circle-alert')}</div><p class="text-sm font-medium text-slate-700">无法加载此页面</p><p class="mt-1 text-sm text-slate-500">${esc(error.message)}</p><button type="button" id="retry" class="btn-secondary mt-4">${icon('refresh-cw')}重试</button></div>`);
+    $('#retry').onclick = render; refreshIcons();
+  }
+}
+
+async function initialize() {
+  if (!state.token) return;
+  try {
+    state.me = await api('/api/auth/me');
+    if (!state.me.is_super_admin) throw new Error('当前账户不是系统管理员');
+    $('#current-user').textContent = state.me.display_name || state.me.username;
+    $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden');
+    await render();
+  } catch (error) {
+    state.token = null; sessionStorage.removeItem('authhub.token'); $('#login-view').classList.remove('hidden');
+    const alert = $('#login-error'); alert.classList.remove('hidden'); $('span', alert).textContent = error.message; refreshIcons();
+  }
+}
+
+$('#login-form').onsubmit = async event => {
+  event.preventDefault();
+  const error = $('#login-error'); error.classList.add('hidden');
+  const buttonEl = $('#login-submit');
+  try {
+    setLoading(buttonEl, true, '登录');
+    const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
+    state.token = data.access_token; sessionStorage.setItem('authhub.token', state.token); await initialize();
+  } catch (reason) { error.classList.remove('hidden'); $('span', error).textContent = reason.message; refreshIcons(); } finally { setLoading(buttonEl, false, '登录'); }
+};
+$('#toggle-password').onclick = () => {
+  const field = $('#password'); field.type = field.type === 'password' ? 'text' : 'password';
+  $('#toggle-password').title = field.type === 'password' ? '显示密码' : '隐藏密码';
+  $('#toggle-password').innerHTML = icon(field.type === 'password' ? 'eye' : 'eye-off'); refreshIcons();
+};
+$('#logout-button').onclick = async () => { try { await api('/api/auth/logout', { method: 'POST' }); } finally { state.token = null; sessionStorage.removeItem('authhub.token'); location.reload(); } };
+$('#menu-button').onclick = () => { $('#sidebar').classList.add('open'); $('#sidebar-backdrop').classList.remove('hidden'); };
+$('#sidebar-backdrop').onclick = () => { $('#sidebar').classList.remove('open'); $('#sidebar-backdrop').classList.add('hidden'); };
+$$('.nav-item').forEach(item => { item.onclick = () => setPage(item.dataset.page); });
+initialize();
+refreshIcons();

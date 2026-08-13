@@ -44,7 +44,6 @@
         <button data-page="overview" class="nav-item active"><i data-lucide="layout-dashboard"></i>概览</button>
         <p class="mb-2 mt-6 px-3 text-[11px] font-semibold uppercase text-slate-400">能力验证</p>
         <button data-page="authorize" class="nav-item"><i data-lucide="badge-check"></i>权限校验</button>
-        <button data-page="module-register" class="nav-item"><i data-lucide="plug-zap"></i>注册业务模块</button>
         <p class="mb-2 mt-6 px-3 text-[11px] font-semibold uppercase text-slate-400">权限配置</p>
         <button data-page="users" class="nav-item"><i data-lucide="users"></i>用户</button>
         <button data-page="organizations" class="nav-item"><i data-lucide="network"></i>组织</button>
@@ -57,12 +56,12 @@
       </nav>
       <div class="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">AuthHub Framework</div>
     </aside>
-    <div class="flex h-full min-w-0 flex-col">
+    <div id="app-main" class="flex h-full min-w-0 flex-1 flex-col">
       <header class="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6">
         <div class="flex min-w-0 items-center gap-3"><button id="menu-button" class="btn-icon md:hidden" title="展开导航"><i data-lucide="menu"></i></button><div class="min-w-0"><span class="text-sm font-medium text-slate-800" id="shell-title">概览</span><span class="mx-2 text-slate-300">/</span><span class="text-sm text-slate-500" id="shell-context">AuthHub</span></div></div>
         <div class="flex items-center gap-2"><span id="current-user" class="hidden max-w-[140px] truncate text-sm text-slate-600 sm:block"></span><button id="logout-button" class="btn-icon" title="退出登录"><i data-lucide="log-out"></i></button></div>
       </header>
-      <main id="main-content" class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div id="notice" class="mb-4 hidden"></div><div id="content"></div></main>
+      <main id="main-content" class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div id="notice" class="mb-4 hidden"></div><div id="content"><div class="initial-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>正在加载管理台...</span></div></div></main>
     </div>
   </section>
 

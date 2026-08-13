@@ -12,6 +12,15 @@ from .ports.repositories import AuthHubRepository
 from .ports.services import AuditLog, Cache, PasswordHasher, TokenService
 
 _UNSET = object()
+RESOURCE_TYPES = frozenset({"api", "entity", "mcp_server", "mcp_tool", "page", "custom"})
+RESOURCE_ACTIONS = {
+    "api": frozenset({"read", "create", "update", "delete", "execute", "manage"}),
+    "entity": frozenset({"view", "read", "create", "update", "delete", "manage"}),
+    "mcp_server": frozenset({"view", "read", "create", "update", "delete", "manage"}),
+    "mcp_tool": frozenset({"view", "execute", "manage"}),
+    "page": frozenset({"view", "manage"}),
+    "custom": frozenset({"view", "read", "create", "update", "delete", "execute", "manage"}),
+}
 
 
 @dataclass(frozen=True)
@@ -67,10 +76,16 @@ class AuthHub:
         return result
 
     # -- User management -------------------------------------------------
-    def create_user(self, username: str, password: str, *, display_name: str = "", email: Optional[str] = None, enabled: bool = True, actor_id: Optional[str] = None) -> User:
+    def create_user(self, username: str, password: str, *, display_name: str = "", email: Optional[str] = None, enabled: bool = True, organization_ids: Optional[Sequence[str]] = None, role_ids: Optional[Sequence[str]] = None, actor_id: Optional[str] = None) -> User:
         if not username or not password: raise ValidationError("username and password are required")
         if self.repository.get_user_by_username(username): raise ConflictError("username already exists")
+        organization_ids = list(dict.fromkeys(str(item) for item in (organization_ids or [])))
+        role_ids = list(dict.fromkeys(str(item) for item in (role_ids or [])))
+        for organization_id in organization_ids: self._organization_or_raise(organization_id)
+        for role_id in role_ids: self._role_or_raise(role_id)
         user = self.repository.save_user(User(new_id(), username, self.passwords.hash(password), display_name, email, enabled))
+        for organization_id in organization_ids: self.repository.assign_organization(user.id, organization_id)
+        for role_id in role_ids: self.repository.assign_role(user.id, role_id)
         self._audit("user.create", actor_id, "user", user.id, "success")
         return user
 
@@ -163,8 +178,9 @@ class AuthHub:
         self._audit("user.organization.remove", actor_id, "organization", organization_id, "success", {"user_id": user_id})
 
     # -- Role / permission management -----------------------------------
-    def create_role(self, code: str, name: str, *, description: Optional[str] = None, actor_id: Optional[str] = None) -> Role:
-        if not code or not name: raise ValidationError("role code and name are required")
+    def create_role(self, code: Optional[str], name: str, *, description: Optional[str] = None, actor_id: Optional[str] = None) -> Role:
+        if not name: raise ValidationError("role name is required")
+        code = str(code or f"role-{new_id()}")
         if self.repository.get_role_by_code(code): raise ConflictError("role code already exists")
         role = self.repository.save_role(Role(new_id(), code, name, description))
         self._audit("role.create", actor_id, "role", role.id, "success")
@@ -197,10 +213,27 @@ class AuthHub:
         self._role_or_raise(role_id)
         return [permission for code in self.repository.role_permission_codes(role_id) if (permission := self.repository.get_permission(code))]
 
-    def create_permission(self, code: str, name: str, *, description: Optional[str] = None, kind: str = "operation", metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> Permission:
+    def create_permission(self, code: Optional[str], name: str, *, description: Optional[str] = None, kind: str = "operation", module_id: Optional[str] = None, resource_id: Optional[str] = None, action: Optional[str] = None, role_ids: Optional[Sequence[str]] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> Permission:
+        if module_id:
+            self.get_module(module_id)
+        role_ids = list(dict.fromkeys(str(item) for item in (role_ids or [])))
+        for role_id in role_ids: self._role_or_raise(role_id)
+        permission_metadata = dict(metadata or {})
+        if resource_id:
+            resource = self.repository.get_resource(resource_id)
+            if not resource: raise NotFoundError("resource", resource_id)
+            if resource.module_id != module_id: raise ValidationError("resource must belong to the selected module")
+            if not action: raise ValidationError("resource permissions require an action")
+            if action not in RESOURCE_ACTIONS[resource.resource_type]: raise ValidationError("action is not supported by this resource type")
+            code = code or f"{module_id}:{resource.resource_type}:{resource.resource_key}:{action}"
+            kind = "api" if resource.resource_type == "api" else "resource"
+            permission_metadata.update({"resource_id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "action": action})
         if not code or not name: raise ValidationError("permission code and name are required")
         if self.repository.get_permission(code): raise ConflictError("permission code already exists")
-        permission = self.repository.save_permission(Permission(new_id(), code, name, description=description, kind=kind, metadata=dict(metadata or {})))
+        permission = self.repository.save_permission(Permission(new_id(), code, name, module_id=module_id, description=description, kind=kind, metadata=permission_metadata))
+        for role_id in role_ids: self.repository.assign_permission(role_id, permission.code)
+        for user in self.repository.list_users():
+            if any(role_id in self.repository.user_role_ids(user.id) for role_id in role_ids): self.invalidate_user_permissions(user.id)
         self._audit("permission.create", actor_id, "permission", code, "success")
         return permission
 
@@ -216,6 +249,24 @@ class AuthHub:
         for user in self.repository.list_users(): self.invalidate_user_permissions(user.id)
         self._audit("permission.update", actor_id, "permission", code, "success")
         return permission
+
+    def create_resource(self, module_id: str, resource_type: str, resource_key: str, name: str, *, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> ResourceDefinition:
+        self.get_module(module_id)
+        if resource_type not in RESOURCE_TYPES: raise ValidationError("unsupported resource type")
+        if not resource_key or not name: raise ValidationError("resource_key and name are required")
+        if any(item.resource_type == resource_type and item.resource_key == resource_key for item in self.repository.list_resources(module_id)):
+            raise ConflictError("resource already exists in this module")
+        resource = self.repository.save_resource(ResourceDefinition(new_id(), resource_type, resource_key, name, module_id, dict(metadata or {})))
+        self._audit("resource.create", actor_id, "resource", resource.id, "success")
+        return resource
+
+    def delete_resource(self, resource_id: str, *, actor_id: Optional[str] = None) -> None:
+        resource = self.repository.get_resource(resource_id)
+        if not resource: raise NotFoundError("resource", resource_id)
+        if any(item.metadata.get("resource_id") == resource_id for item in self.repository.list_permissions()):
+            raise ValidationError("resource is still referenced by permissions")
+        self.repository.delete_resource(resource_id)
+        self._audit("resource.delete", actor_id, "resource", resource_id, "success")
 
     def refresh(self, refresh_token: str) -> Mapping[str, Any]:
         result = self.tokens.refresh(refresh_token)
@@ -262,10 +313,27 @@ class AuthHub:
                 codes.update(code for code in self.repository.role_permission_codes(role_id) if (permission := self.repository.get_permission(code)) and permission.enabled)
         return sorted(codes)
 
-    def register_module(self, module_id: str, module_name: str, *, description: Optional[str] = None, permissions: Optional[Sequence[Mapping[str, Any]]] = None, apis: Optional[Sequence[Mapping[str, Any]]] = None, resources: Optional[Sequence[Mapping[str, Any]]] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> ModuleDefinition:
-        if not module_id or not module_name: raise ValidationError("module_id and module_name are required")
+    def register_module(self, module_id: Optional[str], module_name: str, *, description: Optional[str] = None, permissions: Optional[Sequence[Mapping[str, Any]]] = None, apis: Optional[Sequence[Mapping[str, Any]]] = None, resources: Optional[Sequence[Mapping[str, Any]]] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> ModuleDefinition:
+        if not module_name: raise ValidationError("module_name is required")
+        module_id = str(module_id or f"module-{new_id()}")
+        resources = list(resources or [])
+        registered_resource_ids = set()
+        for item in resources:
+            resource_type = str(item.get("resource_type") or item.get("type") or "")
+            if resource_type not in RESOURCE_TYPES: raise ValidationError("unsupported resource type")
+            resource_key = str(item.get("resource_key") or item.get("key") or "")
+            if not resource_key: raise ValidationError("registered resources require resource_type and resource_key")
+            registered_resource_ids.add(str(item.get("id") or f"{module_id}:{resource_type}:{resource_key}"))
+        if len(registered_resource_ids) != len(resources): raise ValidationError("registered resources must be unique")
         previous = self.repository.get_module(module_id)
-        module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), list(permissions or []), list(apis or []), list(resources or []))
+        previous_resource_ids = {
+            str(item.get("id") or f"{module_id}:{item.get('resource_type') or item.get('type')}:{item.get('resource_key') or item.get('key')}")
+            for item in (previous.resources if previous else [])
+        }
+        removed_resource_ids = previous_resource_ids - registered_resource_ids
+        if any(item.metadata.get("resource_id") in removed_resource_ids for item in self.repository.list_permissions()):
+            raise ValidationError("registered resource is still referenced by permissions")
+        module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), list(permissions or []), list(apis or []), resources)
         module = self.repository.save_module(module)
         new_codes = set()
         for item in module.permissions:
@@ -278,15 +346,10 @@ class AuthHub:
             for code in old_codes - new_codes:
                 existing = self.repository.get_permission(code)
                 if existing and existing.module_id == module_id: self.repository.delete_permission(code)
-        previous_resource_ids = {resource.id for resource in self.repository.list_resources(module_id)}
-        registered_resource_ids = set()
         for item in module.resources:
             resource_type = str(item.get("resource_type") or item.get("type") or "")
             resource_key = str(item.get("resource_key") or item.get("key") or "")
-            if not resource_type or not resource_key:
-                raise ValidationError("registered resources require resource_type and resource_key")
             resource_id = str(item.get("id") or f"{module_id}:{resource_type}:{resource_key}")
-            registered_resource_ids.add(resource_id)
             self.repository.save_resource(ResourceDefinition(resource_id, resource_type, resource_key, str(item.get("name") or resource_key), module_id, dict(item.get("metadata") or item)))
         for resource_id in previous_resource_ids - registered_resource_ids: self.repository.delete_resource(resource_id)
         # A newly registered permission may be assigned immediately by an admin;
@@ -337,14 +400,13 @@ class AuthHub:
     def invalidate_user_permissions(self, user_id: str) -> None: self.cache.delete(f"permissions:{user_id}")
     def list_audit_events(self, *, limit: int = 100, actor_id: Optional[str] = None, action: Optional[str] = None) -> List[AuditEvent]: return list(self.audit.list(limit=limit, actor_id=actor_id, action=action))
 
-    @staticmethod
-    def user_dict(user: User) -> Dict[str, Any]: return {"id": user.id, "username": user.username, "display_name": user.display_name, "email": user.email, "enabled": user.enabled, "is_super_admin": user.is_super_admin}
+    def user_dict(self, user: User) -> Dict[str, Any]: return {"id": user.id, "username": user.username, "display_name": user.display_name, "email": user.email, "organization_ids": sorted(self.repository.user_organization_ids(user.id)), "role_ids": sorted(self.repository.user_role_ids(user.id)), "enabled": user.enabled, "is_super_admin": user.is_super_admin}
     @staticmethod
     def organization_dict(organization: Organization) -> Dict[str, Any]: return {"id": organization.id, "name": organization.name, "parent_id": organization.parent_id, "description": organization.description, "enabled": organization.enabled}
     @staticmethod
     def role_dict(role: Role) -> Dict[str, Any]: return {"id": role.id, "code": role.code, "name": role.name, "description": role.description, "enabled": role.enabled, "built_in": role.built_in}
     @staticmethod
-    def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
+    def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
     @staticmethod
     def resource_dict(resource: ResourceDefinition) -> Dict[str, Any]: return {"id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "name": resource.name, "module_id": resource.module_id, "metadata": dict(resource.metadata)}
     @staticmethod
