@@ -2,7 +2,7 @@
 
 from .application import AuthHub, AuthHubSettings
 from .domain import AuthorizationResult, ModuleDefinition, Permission, Role, User
-from .infrastructure import InMemoryAuthHubRepository, InMemoryCache, InMemoryAuditLog
+from .infrastructure import InMemoryAuthHubRepository, InMemoryCache, InMemoryAuditLog, RedisCache, SQLiteAuthHubRepository
 
 __all__ = [
     "AuthHub",
@@ -11,9 +11,10 @@ __all__ = [
     "InMemoryAuthHubRepository",
     "InMemoryAuditLog",
     "InMemoryCache",
+    "RedisCache",
+    "SQLiteAuthHubRepository",
     "ModuleDefinition",
     "Permission",
     "Role",
     "User",
 ]
-

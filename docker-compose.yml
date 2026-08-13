@@ -1,0 +1,35 @@
+services:
+  auth-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      AUTH_HUB_DATABASE: /var/lib/authhub/authhub.db
+      AUTH_HUB_REDIS_URL: redis://redis:6379/0
+      AUTH_HUB_REDIS_NAMESPACE: "authhub:"
+      AUTH_HUB_ADMIN_USERNAME: "${AUTH_HUB_ADMIN_USERNAME:-admin}"
+      AUTH_HUB_ADMIN_PASSWORD: "${AUTH_HUB_ADMIN_PASSWORD:?Set AUTH_HUB_ADMIN_PASSWORD in .env before starting AuthHub}"
+    ports:
+      - "${AUTH_HUB_PORT:-8000}:8000"
+    volumes:
+      - authhub-data:/var/lib/authhub
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - authhub-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  authhub-data:
+  authhub-redis:

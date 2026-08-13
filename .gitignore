@@ -6,5 +6,8 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-
 .vscode/
+authhub.db
+.env
+
+.DS_Store

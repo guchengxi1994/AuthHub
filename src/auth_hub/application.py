@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .domain.errors import AuthenticationError, AuthorizationError, ConflictError, NotFoundError, ValidationError
-from .domain.models import AuditEvent, AuthorizationResult, ModuleDefinition, Organization, Permission, Role, User, new_id
-from .infrastructure import InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, InMemoryTokenService, SimplePasswordHasher
+from .domain.models import AuditEvent, AuthorizationResult, ModuleDefinition, Organization, Permission, ResourceDefinition, Role, User, new_id
+from .infrastructure import CacheTokenService, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, InMemoryTokenService, SimplePasswordHasher, SQLiteAuditLog, SQLiteAuthHubRepository, SQLiteTokenService
 from .ports.repositories import AuthHubRepository
 from .ports.services import AuditLog, Cache, PasswordHasher, TokenService
+
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,20 @@ class AuthHub:
         service.bootstrap()
         return service
 
+    @classmethod
+    def local(cls, database_path: str = "authhub.db", settings: AuthHubSettings = AuthHubSettings(), *, cache: Optional[Cache] = None) -> "AuthHub":
+        """Create a locally usable instance backed by SQLite and memory cache.
+
+        SQLite is a fallback for development/test environments, not a claim
+        that AuthHub owns the production database. A host can replace the
+        repository and cache independently through the normal constructor.
+        """
+        active_cache = cache or InMemoryCache()
+        tokens: TokenService = CacheTokenService(active_cache) if cache else SQLiteTokenService(database_path)
+        service = cls(SQLiteAuthHubRepository(database_path), active_cache, tokens, SimplePasswordHasher(), SQLiteAuditLog(database_path), settings)
+        service.bootstrap()
+        return service
+
     def bootstrap(self) -> User:
         existing = self.repository.get_user_by_username(self.settings.admin_username)
         if existing: return existing
@@ -51,49 +67,79 @@ class AuthHub:
         return result
 
     # -- User management -------------------------------------------------
-    def create_user(self, username: str, password: str, *, display_name: str = "", email: Optional[str] = None, enabled: bool = True) -> User:
+    def create_user(self, username: str, password: str, *, display_name: str = "", email: Optional[str] = None, enabled: bool = True, actor_id: Optional[str] = None) -> User:
         if not username or not password: raise ValidationError("username and password are required")
         if self.repository.get_user_by_username(username): raise ConflictError("username already exists")
         user = self.repository.save_user(User(new_id(), username, self.passwords.hash(password), display_name, email, enabled))
-        self._audit("user.create", None, "user", user.id, "success")
+        self._audit("user.create", actor_id, "user", user.id, "success")
         return user
 
-    def update_user(self, user_id: str, *, display_name: Optional[str] = None, email: Optional[str] = None, enabled: Optional[bool] = None) -> User:
+    def update_user(self, user_id: str, *, display_name: Optional[str] = None, email: Optional[str] = None, enabled: Optional[bool] = None, actor_id: Optional[str] = None) -> User:
         user = self._user_or_raise(user_id)
+        if enabled is False and user.is_super_admin and self._active_admin_count() <= 1:
+            raise ValidationError("the last system administrator cannot be disabled")
         changes: Dict[str, Any] = {}
         if display_name is not None: changes["display_name"] = display_name
         if email is not None: changes["email"] = email
         if enabled is not None: changes["enabled"] = enabled
         user = self.repository.save_user(user.with_changes(**changes))
         self.invalidate_user_permissions(user_id)
-        self._audit("user.update", None, "user", user.id, "success", {"enabled": user.enabled})
+        if enabled is False:
+            self.tokens.revoke_user_tokens(user_id)
+        self._audit("user.update", actor_id, "user", user.id, "success", {"enabled": user.enabled})
         return user
 
     # Keeping the record avoids orphaning audit records and role relations.
-    def disable_user(self, user_id: str) -> User:
-        return self.update_user(user_id, enabled=False)
+    def disable_user(self, user_id: str, *, actor_id: Optional[str] = None) -> User:
+        return self.update_user(user_id, enabled=False, actor_id=actor_id)
+
+    def delete_user(self, user_id: str, *, actor_id: Optional[str] = None) -> User:
+        user = self._user_or_raise(user_id)
+        if user.is_super_admin: raise ValidationError("system administrators cannot be deleted")
+        user = self.disable_user(user_id, actor_id=actor_id)
+        self._audit("user.delete", actor_id, "user", user.id, "success")
+        return user
+
+    def user_roles(self, user_id: str) -> List[Role]:
+        self._user_or_raise(user_id)
+        return [role for role_id in self.repository.user_role_ids(user_id) if (role := self.repository.get_role(role_id))]
+
+    def user_organizations(self, user_id: str) -> List[Organization]:
+        self._user_or_raise(user_id)
+        return [org for org_id in self.repository.user_organization_ids(user_id) if (org := self.repository.get_organization(org_id))]
 
     def list_users(self) -> List[User]: return self.repository.list_users()
 
     # -- Organization management ----------------------------------------
-    def create_organization(self, name: str, *, parent_id: Optional[str] = None, description: Optional[str] = None) -> Organization:
+    def create_organization(self, name: str, *, parent_id: Optional[str] = None, description: Optional[str] = None, actor_id: Optional[str] = None) -> Organization:
         if not name: raise ValidationError("organization name is required")
         if parent_id:
             self._organization_or_raise(parent_id)
         organization = self.repository.save_organization(Organization(new_id(), name, parent_id, description))
-        self._audit("organization.create", None, "organization", organization.id, "success")
+        self._audit("organization.create", actor_id, "organization", organization.id, "success")
         return organization
 
-    def update_organization(self, organization_id: str, *, name: Optional[str] = None, parent_id: Optional[str] = None, description: Optional[str] = None, enabled: Optional[bool] = None) -> Organization:
+    def update_organization(self, organization_id: str, *, name: Optional[str] = None, parent_id: Any = _UNSET, description: Optional[str] = None, enabled: Optional[bool] = None, actor_id: Optional[str] = None) -> Organization:
         organization = self._organization_or_raise(organization_id)
         if parent_id == organization_id: raise ValidationError("an organization cannot be its own parent")
-        if parent_id: self._organization_or_raise(parent_id)
+        if parent_id is not _UNSET and parent_id:
+            self._organization_or_raise(parent_id)
+            descendants = self._organization_descendant_ids(organization_id)
+            if parent_id in descendants: raise ValidationError("an organization cannot be moved below one of its descendants")
         changes: Dict[str, Any] = {}
         if name is not None: changes["name"] = name
-        if parent_id is not None: changes["parent_id"] = parent_id
+        if parent_id is not _UNSET: changes["parent_id"] = parent_id
         if description is not None: changes["description"] = description
         if enabled is not None: changes["enabled"] = enabled
-        return self.repository.save_organization(organization.with_changes(**changes))
+        organization = self.repository.save_organization(organization.with_changes(**changes))
+        self._audit("organization.update", actor_id, "organization", organization.id, "success")
+        return organization
+
+    def delete_organization(self, organization_id: str, *, actor_id: Optional[str] = None) -> None:
+        self._organization_or_raise(organization_id)
+        if any(org.parent_id == organization_id for org in self.repository.list_organizations()): raise ValidationError("an organization with children cannot be deleted")
+        self.repository.delete_organization(organization_id)
+        self._audit("organization.delete", actor_id, "organization", organization_id, "success")
 
     def list_organizations(self) -> List[Organization]: return self.repository.list_organizations()
 
@@ -106,20 +152,25 @@ class AuthHub:
             else: roots.append(node)
         return roots
 
-    def assign_organization(self, user_id: str, organization_id: str) -> None:
+    def assign_organization(self, user_id: str, organization_id: str, *, actor_id: Optional[str] = None) -> None:
         self._user_or_raise(user_id); self._organization_or_raise(organization_id)
         self.repository.assign_organization(user_id, organization_id)
-        self._audit("user.organization.assign", None, "organization", organization_id, "success", {"user_id": user_id})
+        self._audit("user.organization.assign", actor_id, "organization", organization_id, "success", {"user_id": user_id})
+
+    def remove_organization(self, user_id: str, organization_id: str, *, actor_id: Optional[str] = None) -> None:
+        self._user_or_raise(user_id); self._organization_or_raise(organization_id)
+        self.repository.remove_organization(user_id, organization_id)
+        self._audit("user.organization.remove", actor_id, "organization", organization_id, "success", {"user_id": user_id})
 
     # -- Role / permission management -----------------------------------
-    def create_role(self, code: str, name: str, *, description: Optional[str] = None) -> Role:
+    def create_role(self, code: str, name: str, *, description: Optional[str] = None, actor_id: Optional[str] = None) -> Role:
         if not code or not name: raise ValidationError("role code and name are required")
         if self.repository.get_role_by_code(code): raise ConflictError("role code already exists")
         role = self.repository.save_role(Role(new_id(), code, name, description))
-        self._audit("role.create", None, "role", role.id, "success")
+        self._audit("role.create", actor_id, "role", role.id, "success")
         return role
 
-    def update_role(self, role_id: str, *, name: Optional[str] = None, description: Optional[str] = None, enabled: Optional[bool] = None) -> Role:
+    def update_role(self, role_id: str, *, name: Optional[str] = None, description: Optional[str] = None, enabled: Optional[bool] = None, actor_id: Optional[str] = None) -> Role:
         role = self._role_or_raise(role_id)
         if role.built_in and enabled is False: raise ValidationError("built-in role cannot be disabled")
         changes: Dict[str, Any] = {}
@@ -129,10 +180,42 @@ class AuthHub:
         role = self.repository.save_role(role.with_changes(**changes))
         for user in self.repository.list_users():
             if role_id in self.repository.user_role_ids(user.id): self.invalidate_user_permissions(user.id)
+        self._audit("role.update", actor_id, "role", role.id, "success")
         return role
+
+    def delete_role(self, role_id: str, *, actor_id: Optional[str] = None) -> None:
+        role = self._role_or_raise(role_id)
+        if role.built_in: raise ValidationError("built-in role cannot be deleted")
+        affected = [user.id for user in self.repository.list_users() if role_id in self.repository.user_role_ids(user.id)]
+        self.repository.delete_role(role_id)
+        for user_id in affected: self.invalidate_user_permissions(user_id)
+        self._audit("role.delete", actor_id, "role", role_id, "success")
 
     def list_roles(self) -> List[Role]: return self.repository.list_roles()
     def list_permissions(self) -> List[Permission]: return self.repository.list_permissions()
+    def role_permissions(self, role_id: str) -> List[Permission]:
+        self._role_or_raise(role_id)
+        return [permission for code in self.repository.role_permission_codes(role_id) if (permission := self.repository.get_permission(code))]
+
+    def create_permission(self, code: str, name: str, *, description: Optional[str] = None, kind: str = "operation", metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> Permission:
+        if not code or not name: raise ValidationError("permission code and name are required")
+        if self.repository.get_permission(code): raise ConflictError("permission code already exists")
+        permission = self.repository.save_permission(Permission(new_id(), code, name, description=description, kind=kind, metadata=dict(metadata or {})))
+        self._audit("permission.create", actor_id, "permission", code, "success")
+        return permission
+
+    def update_permission(self, code: str, *, name: Optional[str] = None, description: Optional[str] = None, enabled: Optional[bool] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> Permission:
+        permission = self.repository.get_permission(code)
+        if not permission: raise NotFoundError("permission", code)
+        changes: Dict[str, Any] = {}
+        if name is not None: changes["name"] = name
+        if description is not None: changes["description"] = description
+        if enabled is not None: changes["enabled"] = enabled
+        if metadata is not None: changes["metadata"] = dict(metadata)
+        permission = self.repository.save_permission(permission.with_changes(**changes))
+        for user in self.repository.list_users(): self.invalidate_user_permissions(user.id)
+        self._audit("permission.update", actor_id, "permission", code, "success")
+        return permission
 
     def refresh(self, refresh_token: str) -> Mapping[str, Any]:
         result = self.tokens.refresh(refresh_token)
@@ -155,8 +238,11 @@ class AuthHub:
         if not permission: raise ValidationError("permission is required")
         try: user = self.authenticate(access_token)
         except AuthenticationError as error: return AuthorizationResult(False, False, permission, reason=error.code)
+        known_permission = self.repository.get_permission(permission)
+        if not known_permission or not known_permission.enabled:
+            return AuthorizationResult(False, True, permission, user.id, reason="PERMISSION_NOT_FOUND")
         if user.is_super_admin: return AuthorizationResult(True, True, permission, user.id, matched_by="system_admin")
-        cache_key = f"authhub:permissions:{user.id}"
+        cache_key = f"permissions:{user.id}"
         permissions = self.cache.get(cache_key)
         if permissions is None:
             permissions = sorted(self.user_permissions(user.id)); self.cache.set(cache_key, permissions, self.settings.permission_cache_ttl)
@@ -172,35 +258,84 @@ class AuthHub:
         codes = set()
         for role_id in self.repository.user_role_ids(user_id):
             role = self.repository.get_role(role_id)
-            if role and role.enabled: codes.update(self.repository.role_permission_codes(role_id))
+            if role and role.enabled:
+                codes.update(code for code in self.repository.role_permission_codes(role_id) if (permission := self.repository.get_permission(code)) and permission.enabled)
         return sorted(codes)
 
-    def register_module(self, module_id: str, module_name: str, *, description: Optional[str] = None, permissions: Optional[Sequence[Mapping[str, Any]]] = None, apis: Optional[Sequence[Mapping[str, Any]]] = None, resources: Optional[Sequence[Mapping[str, Any]]] = None, metadata: Optional[Mapping[str, Any]] = None) -> ModuleDefinition:
+    def register_module(self, module_id: str, module_name: str, *, description: Optional[str] = None, permissions: Optional[Sequence[Mapping[str, Any]]] = None, apis: Optional[Sequence[Mapping[str, Any]]] = None, resources: Optional[Sequence[Mapping[str, Any]]] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> ModuleDefinition:
         if not module_id or not module_name: raise ValidationError("module_id and module_name are required")
+        previous = self.repository.get_module(module_id)
         module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), list(permissions or []), list(apis or []), list(resources or []))
         module = self.repository.save_module(module)
+        new_codes = set()
         for item in module.permissions:
             code = str(item.get("id") or item.get("code") or "")
-            if code: self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), metadata=dict(item)))
+            if code:
+                new_codes.add(code)
+                self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), metadata=dict(item)))
+        if previous:
+            old_codes = {str(item.get("id") or item.get("code") or "") for item in previous.permissions}
+            for code in old_codes - new_codes:
+                existing = self.repository.get_permission(code)
+                if existing and existing.module_id == module_id: self.repository.delete_permission(code)
+        previous_resource_ids = {resource.id for resource in self.repository.list_resources(module_id)}
+        registered_resource_ids = set()
+        for item in module.resources:
+            resource_type = str(item.get("resource_type") or item.get("type") or "")
+            resource_key = str(item.get("resource_key") or item.get("key") or "")
+            if not resource_type or not resource_key:
+                raise ValidationError("registered resources require resource_type and resource_key")
+            resource_id = str(item.get("id") or f"{module_id}:{resource_type}:{resource_key}")
+            registered_resource_ids.add(resource_id)
+            self.repository.save_resource(ResourceDefinition(resource_id, resource_type, resource_key, str(item.get("name") or resource_key), module_id, dict(item.get("metadata") or item)))
+        for resource_id in previous_resource_ids - registered_resource_ids: self.repository.delete_resource(resource_id)
         # A newly registered permission may be assigned immediately by an admin;
         # invalidate every currently known user cache because the cache port has
         # no wildcard/delete-by-prefix requirement.
         for user in self.repository.list_users(): self.invalidate_user_permissions(user.id)
+        self._audit("module.register", actor_id, "module", module.id, "success", {"permissions": len(module.permissions), "apis": len(module.apis), "resources": len(module.resources)})
         return module
 
-    def assign_role(self, user_id: str, role_id: str) -> None:
+    def list_modules(self) -> List[ModuleDefinition]: return self.repository.list_modules()
+    def list_resources(self, module_id: Optional[str] = None) -> List[ResourceDefinition]: return self.repository.list_resources(module_id)
+    def get_module(self, module_id: str) -> ModuleDefinition:
+        module = self.repository.get_module(module_id)
+        if not module: raise NotFoundError("module", module_id)
+        return module
+    def delete_module(self, module_id: str, *, actor_id: Optional[str] = None) -> None:
+        self.get_module(module_id)
+        for permission in [item for item in self.repository.list_permissions() if item.module_id == module_id]: self.repository.delete_permission(permission.code)
+        self.repository.delete_module(module_id)
+        for user in self.repository.list_users(): self.invalidate_user_permissions(user.id)
+        self._audit("module.delete", actor_id, "module", module_id, "success")
+
+    def assign_role(self, user_id: str, role_id: str, *, actor_id: Optional[str] = None) -> None:
         if not self.repository.get_user(user_id): raise NotFoundError("user", user_id)
         if not self.repository.get_role(role_id): raise NotFoundError("role", role_id)
-        self.repository.assign_role(user_id, role_id); self.invalidate_user_permissions(user_id)
+        self.repository.assign_role(user_id, role_id); self.invalidate_user_permissions(user_id); self._audit("user.role.assign", actor_id, "role", role_id, "success", {"user_id": user_id})
 
-    def assign_permission(self, role_id: str, permission: str) -> None:
+    def remove_role(self, user_id: str, role_id: str, *, actor_id: Optional[str] = None) -> None:
+        self._user_or_raise(user_id); self._role_or_raise(role_id)
+        self.repository.remove_role(user_id, role_id); self.invalidate_user_permissions(user_id); self._audit("user.role.remove", actor_id, "role", role_id, "success", {"user_id": user_id})
+
+    def assign_permission(self, role_id: str, permission: str, *, actor_id: Optional[str] = None) -> None:
         if not self.repository.get_role(role_id): raise NotFoundError("role", role_id)
         if not self.repository.get_permission(permission): raise NotFoundError("permission", permission)
         self.repository.assign_permission(role_id, permission)
         for user in self.repository.list_users():
             if role_id in self.repository.user_role_ids(user.id): self.invalidate_user_permissions(user.id)
+        self._audit("role.permission.assign", actor_id, "permission", permission, "success", {"role_id": role_id})
 
-    def invalidate_user_permissions(self, user_id: str) -> None: self.cache.delete(f"authhub:permissions:{user_id}")
+    def remove_permission(self, role_id: str, permission: str, *, actor_id: Optional[str] = None) -> None:
+        self._role_or_raise(role_id)
+        if not self.repository.get_permission(permission): raise NotFoundError("permission", permission)
+        self.repository.remove_permission(role_id, permission)
+        for user in self.repository.list_users():
+            if role_id in self.repository.user_role_ids(user.id): self.invalidate_user_permissions(user.id)
+        self._audit("role.permission.remove", actor_id, "permission", permission, "success", {"role_id": role_id})
+
+    def invalidate_user_permissions(self, user_id: str) -> None: self.cache.delete(f"permissions:{user_id}")
+    def list_audit_events(self, *, limit: int = 100, actor_id: Optional[str] = None, action: Optional[str] = None) -> List[AuditEvent]: return list(self.audit.list(limit=limit, actor_id=actor_id, action=action))
 
     @staticmethod
     def user_dict(user: User) -> Dict[str, Any]: return {"id": user.id, "username": user.username, "display_name": user.display_name, "email": user.email, "enabled": user.enabled, "is_super_admin": user.is_super_admin}
@@ -210,6 +345,10 @@ class AuthHub:
     def role_dict(role: Role) -> Dict[str, Any]: return {"id": role.id, "code": role.code, "name": role.name, "description": role.description, "enabled": role.enabled, "built_in": role.built_in}
     @staticmethod
     def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
+    @staticmethod
+    def resource_dict(resource: ResourceDefinition) -> Dict[str, Any]: return {"id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "name": resource.name, "module_id": resource.module_id, "metadata": dict(resource.metadata)}
+    @staticmethod
+    def audit_event_dict(event: AuditEvent) -> Dict[str, Any]: return {"id": event.id, "action": event.action, "actor_id": event.actor_id, "target_type": event.target_type, "target_id": event.target_id, "outcome": event.outcome, "occurred_at": event.occurred_at.isoformat(), "metadata": dict(event.metadata)}
     def _user_or_raise(self, user_id: str) -> User:
         user = self.repository.get_user(user_id)
         if not user: raise NotFoundError("user", user_id)
@@ -222,4 +361,14 @@ class AuthHub:
         role = self.repository.get_role(role_id)
         if not role: raise NotFoundError("role", role_id)
         return role
+    def _active_admin_count(self) -> int: return sum(1 for user in self.repository.list_users() if user.is_super_admin and user.enabled)
+    def _organization_descendant_ids(self, organization_id: str) -> set[str]:
+        children: Dict[str, List[str]] = {}
+        for organization in self.repository.list_organizations():
+            if organization.parent_id: children.setdefault(organization.parent_id, []).append(organization.id)
+        result, pending = set(), list(children.get(organization_id, []))
+        while pending:
+            current = pending.pop()
+            if current not in result: result.add(current); pending.extend(children.get(current, []))
+        return result
     def _audit(self, action: str, actor_id: Optional[str], target_type: str, target_id: Optional[str], outcome: str, metadata: Optional[Mapping[str, Any]] = None) -> None: self.audit.append(AuditEvent(new_id(), action, actor_id, target_type, target_id, outcome, metadata=dict(metadata or {})))
