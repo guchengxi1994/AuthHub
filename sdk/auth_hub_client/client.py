@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence
+from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+_UNSET = object()
 
 
 class AuthHubClientError(RuntimeError):
@@ -50,6 +54,10 @@ class ResourceSpec:
         if self.metadata: result["metadata"] = dict(self.metadata)
         return result
 
+    def resolved_id(self, module_id: str) -> str:
+        """Return the deterministic AuthHub resource definition ID."""
+        return self.id or f"{module_id}:{self.resource_type}:{self.key}"
+
 
 @dataclass(frozen=True)
 class PermissionSpec:
@@ -59,6 +67,7 @@ class PermissionSpec:
     code: Optional[str] = None
     description: Optional[str] = None
     id: Optional[str] = None
+    scope: str = "global"
 
     def resolved_code(self, module_id: str, resources: Mapping[str, ResourceSpec]) -> str:
         resource = resources.get(self.resource)
@@ -68,7 +77,7 @@ class PermissionSpec:
     def to_dict(self, resources: Mapping[str, ResourceSpec]) -> Dict[str, Any]:
         resource = resources.get(self.resource)
         if not resource: raise ValueError(f"permission references unknown resource: {self.resource}")
-        result: Dict[str, Any] = {"id": self.id or self.code or "", "name": self.name, "resource_id": resource.id or "", "resource_type": resource.resource_type, "resource_key": resource.key, "action": self.action}
+        result: Dict[str, Any] = {"id": self.id or self.code or "", "name": self.name, "resource_id": resource.id or "", "resource_type": resource.resource_type, "resource_key": resource.key, "action": self.action, "scope": self.scope}
         if self.description: result["description"] = self.description
         return result
 
@@ -89,12 +98,31 @@ class ModuleManifest:
         if not permission: raise ValueError(f"no declared permission for {resource_key}:{action}")
         return permission.resolved_code(self.module_id, resources)
 
+    def resource_id(self, resource_key: str) -> str:
+        """Return the stable resource ID used by object-level checks."""
+        if not self.module_id: raise ValueError("module_id is required to derive a stable resource ID")
+        resource = next((item for item in self.resources if item.key == resource_key), None)
+        if not resource: raise ValueError(f"unknown resource: {resource_key}")
+        return resource.resolved_id(self.module_id)
+
     def to_payload(self) -> Dict[str, Any]:
         resources = {item.key: item for item in self.resources}
         if len(resources) != len(self.resources): raise ValueError("resource keys must be unique within a module")
         missing = [item.resource for item in self.permissions if item.resource not in resources]
         if missing: raise ValueError(f"permissions reference unknown resources: {', '.join(missing)}")
-        return {"module_id": self.module_id, "module_name": self.name, "description": self.description, "metadata": dict(self.metadata), "resources": [item.to_dict() for item in self.resources], "permissions": [item.to_dict(resources) for item in self.permissions], "apis": []}
+        resource_payloads = []
+        for item in self.resources:
+            payload = item.to_dict()
+            if self.module_id:
+                payload["id"] = item.resolved_id(self.module_id)
+            resource_payloads.append(payload)
+        permissions = []
+        for item in self.permissions:
+            payload = item.to_dict(resources)
+            if self.module_id:
+                payload["resource_id"] = self.resource_id(item.resource)
+            permissions.append(payload)
+        return {"module_id": self.module_id, "module_name": self.name, "description": self.description, "metadata": dict(self.metadata), "resources": resource_payloads, "permissions": permissions, "apis": []}
 
 
 class AuthHubClient:
@@ -134,8 +162,30 @@ class AuthHubClient:
         if not result.get("allowed"): raise AuthorizationDenied(permission, result.get("reason", "PERMISSION_DENIED"))
         return result
 
+    def check_resource_or_raise(self, access_token: str, permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
+        payload: Dict[str, Any] = {"permission": permission, "resource_id": resource_id, "external_id": external_id}
+        if context is not None: payload["context"] = dict(context)
+        result = self._request("POST", "/api/auth/check-resource", payload, headers={"Authorization": f"Bearer {access_token}"})
+        if not result.get("authenticated"): raise AuthHubClientError("authentication required", code=result.get("reason"), status_code=401)
+        if not result.get("allowed"): raise AuthorizationDenied(permission, result.get("reason", "PERMISSION_DENIED"))
+        return result
+
     def user_permissions(self, access_token: str) -> Mapping[str, Any]:
         return self._request("GET", "/api/auth/user-permissions", headers={"Authorization": f"Bearer {access_token}"})
+
+    def register_resource_instance(self, resource_id: str, external_id: str, *, owner_user_id: Any = _UNSET, organization_id: Any = _UNSET, metadata: Any = _UNSET) -> Mapping[str, Any]:
+        payload: Dict[str, Any] = {"resource_id": resource_id, "external_id": external_id}
+        if owner_user_id is not _UNSET: payload["owner_user_id"] = owner_user_id
+        if organization_id is not _UNSET: payload["organization_id"] = organization_id
+        if metadata is not _UNSET: payload["metadata"] = dict(metadata or {})
+        headers = {"X-AuthHub-Registration-Key": self.registration_key} if self.registration_key else {}
+        return self._request("POST", "/api/resource-instances", payload, headers=headers)
+
+    def unregister_resource_instance(self, resource_id: str, external_id: str) -> Mapping[str, Any]:
+        """Remove the ownership index after the business record is deleted."""
+        headers = {"X-AuthHub-Registration-Key": self.registration_key} if self.registration_key else {}
+        path = f"/api/resource-instances?{urlencode({'resource_id': resource_id, 'external_id': external_id})}"
+        return self._request("DELETE", path, headers=headers)
 
     def _request(self, method: str, path: str, payload: Optional[Mapping[str, Any]] = None, *, headers: Optional[Mapping[str, str]] = None) -> Mapping[str, Any]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None

@@ -89,6 +89,22 @@ class ResourceDefinition:
 
 
 @dataclass(frozen=True)
+class ResourceInstance:
+    """Ownership index for a record owned by an upstream business service."""
+    id: str
+    resource_id: str
+    external_id: str
+    owner_user_id: Optional[str] = None
+    organization_id: Optional[str] = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
+
+    def with_changes(self, **changes: Any) -> "ResourceInstance":
+        return replace(self, **changes, updated_at=utcnow())
+
+
+@dataclass(frozen=True)
 class ModuleDefinition:
     id: str
     name: str

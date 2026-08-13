@@ -2,7 +2,8 @@
 
 from .application import AuthHub, AuthHubSettings
 from .domain import AuthorizationResult, ModuleDefinition, Permission, Role, User
-from .infrastructure import InMemoryAuthHubRepository, InMemoryCache, InMemoryAuditLog, RedisCache, SQLiteAuthHubRepository
+from .infrastructure import InMemoryAuthHubRepository, InMemoryCache, InMemoryAuditLog, RedisCache
+from .sqlalchemy_infrastructure import SQLAlchemyAuthHubRepository, SQLAlchemyAuditLog, SQLAlchemyTokenService
 
 __all__ = [
     "AuthHub",
@@ -12,7 +13,7 @@ __all__ = [
     "InMemoryAuditLog",
     "InMemoryCache",
     "RedisCache",
-    "SQLiteAuthHubRepository",
+    "SQLAlchemyAuthHubRepository", "SQLAlchemyAuditLog", "SQLAlchemyTokenService",
     "ModuleDefinition",
     "Permission",
     "Role",

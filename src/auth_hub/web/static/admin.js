@@ -1,6 +1,6 @@
 const pages = {
   overview: '概览', authorize: '权限校验', users: '用户', organizations: '组织',
-  roles: '角色', permissions: '权限', modules: '业务模块', resources: '资源', audit: '审计日志'
+  roles: '角色', permissions: '权限', modules: '业务模块', resources: '资源', 'resource-instances': '资源实例', audit: '审计日志'
 };
 const resourceTypes = {
   api: 'API 接口', entity: '业务实体', mcp_server: 'MCP Server',
@@ -109,10 +109,10 @@ function selectionList(items, inputName, selected = new Set(), value = item => i
 
 async function renderOverview() {
   const [overview, audit] = await Promise.all([api('/api/admin/overview'), api('/api/audit-events?limit=8')]);
-  const metrics = [['用户', overview.users, 'users', 'blue'], ['组织', overview.organizations, 'network', 'warning'], ['角色', overview.roles, 'key-round', 'active'], ['权限', overview.permissions, 'key-square', 'blue'], ['模块', overview.modules, 'boxes', 'warning'], ['资源', overview.resources, 'database-zap', 'active']];
+  const metrics = [['用户', overview.users, 'users', 'blue'], ['组织', overview.organizations, 'network', 'warning'], ['角色', overview.roles, 'key-round', 'active'], ['权限', overview.permissions, 'key-square', 'blue'], ['模块', overview.modules, 'boxes', 'warning'], ['资源', overview.resources, 'database-zap', 'active'], ['实例索引', overview.resource_instances, 'list-tree', 'blue']];
   const rows = audit.items.map(event => `<tr><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(event.occurred_at).toLocaleString())}</td><td class="font-mono text-xs text-slate-700">${esc(event.action)}</td><td class="text-slate-500">${esc(event.target_type)} ${esc(event.target_id || '')}</td><td>${badge(event.outcome, event.outcome === 'success' || event.outcome === 'allowed' ? 'active' : 'danger')}</td></tr>`).join('');
   $('#content').innerHTML = pageHeader('概览', `${button('权限校验', 'goto:authorize', 'badge-check', 'secondary')}${button('新增业务模块', 'new-module', 'plus', 'primary')}`)
-    + `<div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">${metrics.map(([label, value, name, tone]) => `<div class="surface min-w-0 px-4 py-3"><div class="flex items-center justify-between"><span class="text-xs font-medium text-slate-500">${label}</span><span class="grid h-7 w-7 place-items-center rounded-lg ${tone === 'active' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'}">${icon(name, 'h-4 w-4')}</span></div><div class="mt-2 text-2xl font-semibold leading-none text-slate-900">${value}</div></div>`).join('')}</div>`
+    + `<div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7">${metrics.map(([label, value, name, tone]) => `<div class="surface min-w-0 px-4 py-3"><div class="flex items-center justify-between"><span class="text-xs font-medium text-slate-500">${label}</span><span class="grid h-7 w-7 place-items-center rounded-lg ${tone === 'active' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'}">${icon(name, 'h-4 w-4')}</span></div><div class="mt-2 text-2xl font-semibold leading-none text-slate-900">${value}</div></div>`).join('')}</div>`
     + `<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"><section class="surface overflow-hidden"><div class="flex h-12 items-center justify-between border-b border-slate-100 px-4"><h2 class="text-sm font-semibold text-slate-800">最近审计</h2><button type="button" class="text-sm font-medium text-brand-600 hover:text-brand-700" data-action="goto:audit">查看全部</button></div><div class="overflow-x-auto"><table class="data-table"><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>结果</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${empty('暂无审计记录')}</td></tr>`}</tbody></table></div></section><section class="surface p-4"><h2 class="text-sm font-semibold text-slate-800">配置入口</h2><div class="mt-3 divide-y divide-slate-100"><button type="button" data-action="goto:modules" class="overview-link"><span>${icon('boxes', 'h-4 w-4')} 新增业务模块</span>${icon('chevron-right', 'h-4 w-4')}</button><button type="button" data-action="goto:resources" class="overview-link"><span>${icon('database-zap', 'h-4 w-4')} 建立受控资源</span>${icon('chevron-right', 'h-4 w-4')}</button><button type="button" data-action="goto:permissions" class="overview-link"><span>${icon('key-square', 'h-4 w-4')} 配置资源操作权限</span>${icon('chevron-right', 'h-4 w-4')}</button></div></section></div>`;
   bindActions();
   refreshIcons();
@@ -280,10 +280,11 @@ async function renderPermissions() {
   const [permissions, modules, resources] = await Promise.all([api('/api/permissions'), api('/api/modules'), api('/api/resources')]);
   const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
   const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
-  const rows = permissions.items.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 text-xs text-slate-500">${esc(permission.description || '-')}</div></td><td class="text-slate-500">${esc(moduleNames[permission.module_id] || '-')}</td><td><div class="font-medium text-slate-700">${esc(resourceNames[permission.resource_id] || permission.resource_key || '-')}</div><div class="mt-0.5 text-xs text-slate-500">${esc(resourceLabel(permission.resource_type))}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${status(permission.enabled)}</td></tr>`).join('');
+  const scopeLabels = { global: '全部', owner: '本人归属', organization: '组织归属' };
+  const rows = permissions.items.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 text-xs text-slate-500">${esc(permission.description || '-')}</div></td><td class="text-slate-500">${esc(moduleNames[permission.module_id] || '-')}</td><td><div class="font-medium text-slate-700">${esc(resourceNames[permission.resource_id] || permission.resource_key || '-')}</div><div class="mt-0.5 text-xs text-slate-500">${esc(resourceLabel(permission.resource_type))}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${badge(scopeLabels[permission.scope || 'global'] || permission.scope || '全部', permission.scope === 'global' ? 'muted' : 'active')}</td><td>${status(permission.enabled)}</td></tr>`).join('');
   $('#content').innerHTML = pageHeader('权限', button('新增权限', 'new-permission', 'plus', 'primary'))
     + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选权限、模块或资源"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissions.items.length} 项权限</span></div>`
-    + table(['权限', '业务模块', '资源', '操作', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
+    + table(['权限', '业务模块', '资源', '操作', '数据范围', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
   $('#permission-list-filter').oninput = event => {
     const value = event.target.value.toLowerCase();
     $$('[data-permission-row]').forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
@@ -294,7 +295,7 @@ async function renderPermissions() {
 async function showPermission() {
   const [modules, resources, roles] = await Promise.all([api('/api/modules'), api('/api/resources'), api('/api/roles')]);
   const moduleOptions = modules.items.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
-  const el = openModal('新增权限', `<form id="permission-form" class="space-y-5"><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">权限名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如查看订单"></div><div><label class="label">业务模块 <span class="text-rose-600">*</span></label><select class="field" name="module_id" id="permission-module" required><option value="">请选择业务模块</option>${moduleOptions}</select></div></div><div><label class="label">资源 <span class="text-rose-600">*</span></label><select class="field" name="resource_id" id="permission-resource" required disabled><option value="">请先选择业务模块</option></select></div><div><label class="label">允许的操作 <span class="text-rose-600">*</span></label><select class="field" name="action" id="permission-action" required disabled><option value="">请先选择资源</option></select></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="说明这项操作允许做什么"></textarea></div><div><span class="label">授予角色 <span class="text-rose-600">*</span></span>${selectionList(roles.items.filter(role => role.enabled), 'role_ids')}<p class="field-help">权限创建后立即授予所选角色；后续也可在角色页调整。</p></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建权限</button></div></form>`);
+  const el = openModal('新增权限', `<form id="permission-form" class="space-y-5"><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">权限名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如查看订单"></div><div><label class="label">业务模块 <span class="text-rose-600">*</span></label><select class="field" name="module_id" id="permission-module" required><option value="">请选择业务模块</option>${moduleOptions}</select></div></div><div><label class="label">资源 <span class="text-rose-600">*</span></label><select class="field" name="resource_id" id="permission-resource" required disabled><option value="">请先选择业务模块</option></select></div><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">允许的操作 <span class="text-rose-600">*</span></label><select class="field" name="action" id="permission-action" required disabled><option value="">请先选择资源</option></select></div><div><label class="label">数据范围 <span class="text-rose-600">*</span></label><select class="field" name="scope" required><option value="global">全部资源</option><option value="owner">仅本人创建/拥有</option><option value="organization">所属组织</option></select><p class="field-help">实例归属由业务服务注册；超级管理员始终可操作。</p></div></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="说明这项操作允许做什么"></textarea></div><div><span class="label">授予角色 <span class="text-rose-600">*</span></span>${selectionList(roles.items.filter(role => role.enabled), 'role_ids')}<p class="field-help">权限创建后立即授予所选角色；后续也可在角色页调整。</p></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建权限</button></div></form>`);
   const updateResources = () => {
     const moduleId = $('#permission-module', el).value;
     const select = $('#permission-resource', el);
@@ -322,7 +323,7 @@ async function showPermission() {
     try {
       if (!form.getAll('role_ids').length) throw new Error('请至少选择一个角色');
       setLoading(buttonEl, true, '创建权限');
-      await api('/api/permissions', { method: 'POST', body: JSON.stringify({ name: form.get('name'), module_id: form.get('module_id'), resource_id: form.get('resource_id'), action: form.get('action'), description: form.get('description') || undefined, role_ids: form.getAll('role_ids') }) });
+      await api('/api/permissions', { method: 'POST', body: JSON.stringify({ name: form.get('name'), module_id: form.get('module_id'), resource_id: form.get('resource_id'), action: form.get('action'), scope: form.get('scope'), description: form.get('description') || undefined, role_ids: form.getAll('role_ids') }) });
       el.close(); setToast('权限已创建并绑定资源'); renderPermissions();
     } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '创建权限'); }
   };
@@ -358,6 +359,16 @@ async function renderResources() {
   const rows = resources.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td>${badge(resourceLabel(item.resource_type), 'blue')}</td><td class="max-w-[260px] truncate font-mono text-xs text-slate-600">${esc(item.resource_key)}</td><td class="text-slate-500">${esc(moduleNames[item.module_id] || '-')}</td><td><div class="flex justify-end">${button('删除', `resource-delete:${item.id}`, 'trash-2')}</div></td></tr>`).join('');
   $('#content').innerHTML = pageHeader('资源', button('新增资源', 'new-resource', 'plus', 'primary')) + table(['资源', '资源类别', '资源标识', '业务模块', '操作'], rows, '暂无资源。资源是需要被授权的对象，必须属于一个业务模块。');
   bindActions(); refreshIcons();
+}
+
+async function renderResourceInstances() {
+  const [instances, resources, users, organizations] = await Promise.all([api('/api/resource-instances'), api('/api/resources'), api('/api/users'), api('/api/organizations')]);
+  const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
+  const userNames = Object.fromEntries(users.items.map(item => [item.id, item.display_name || item.username]));
+  const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
+  const rows = instances.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(item.updated_at).toLocaleString())}</td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('资源实例') + table(['资源', '业务记录 ID', '归属用户', '归属组织', '最近同步'], rows, '暂无业务服务登记的资源实例。实例归属由业务服务通过 SDK 自动同步，管理台只读展示。');
+  refreshIcons();
 }
 
 async function showNewResource() {
@@ -440,7 +451,7 @@ async function render() {
   clearNotice();
   $('#content').innerHTML = `<div class="grid gap-3"><div class="skeleton h-7 w-32"></div><div class="surface p-5"><div class="skeleton h-9 w-full"></div><div class="mt-3 skeleton h-9 w-full"></div><div class="mt-3 skeleton h-9 w-3/4"></div></div></div>`;
   try {
-    await ({ overview: renderOverview, authorize: renderAuthorize, users: renderUsers, organizations: renderOrganizations, roles: renderRoles, permissions: renderPermissions, modules: renderModules, resources: renderResources, audit: renderAudit }[state.page])();
+    await ({ overview: renderOverview, authorize: renderAuthorize, users: renderUsers, organizations: renderOrganizations, roles: renderRoles, permissions: renderPermissions, modules: renderModules, resources: renderResources, 'resource-instances': renderResourceInstances, audit: renderAudit }[state.page])();
   } catch (error) {
     $('#content').innerHTML = panel(`<div class="flex min-h-[240px] flex-col items-center justify-center p-6 text-center"><div class="mb-3 grid h-10 w-10 place-items-center rounded-full bg-rose-50 text-rose-600">${icon('circle-alert')}</div><p class="text-sm font-medium text-slate-700">无法加载此页面</p><p class="mt-1 text-sm text-slate-500">${esc(error.message)}</p><button type="button" id="retry" class="btn-secondary mt-4">${icon('refresh-cw')}重试</button></div>`);
     $('#retry').onclick = render; refreshIcons();

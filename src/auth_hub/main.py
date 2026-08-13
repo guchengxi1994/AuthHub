@@ -16,7 +16,7 @@ def _cache_from_environment():
     return RedisCache(redis.Redis.from_url(redis_url), namespace=os.getenv("AUTH_HUB_REDIS_NAMESPACE", "authhub:"))
 
 app = create_app(
-    database_path=os.getenv("AUTH_HUB_DATABASE", "authhub.db"),
+    database_path=os.getenv("AUTH_HUB_DATABASE", "sqlite+pysqlite:///authhub.db"),
     cache=_cache_from_environment(),
     settings=AuthHubSettings(
         admin_username=os.getenv("AUTH_HUB_ADMIN_USERNAME", "admin"),

@@ -29,7 +29,7 @@ The frontend never calls the module registration endpoint and never receives the
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
-from auth_hub_client import AuthHubClient, ModuleManifest, PermissionSpec, ResourceSpec, require_permission
+from auth_hub_client import AuthHubClient, ModuleManifest, PermissionSpec, ResourceSpec, require_permission, require_resource_permission
 
 manifest = ModuleManifest(
     module_id="knowledge",
@@ -37,13 +37,15 @@ manifest = ModuleManifest(
     resources=[
         ResourceSpec.mcp_tool("search", "知识检索工具"),
         ResourceSpec.api("/documents", "文档接口"),
+        ResourceSpec.entity("order", "订单"),
         ResourceSpec.page("document-list", "文档列表页面"),
         ResourceSpec.ui_action("document-export", "导出文档"),
         ResourceSpec.ui_component("document-sensitive-tab", "敏感信息 Tab"),
     ],
     permissions=[
         PermissionSpec("execute", "执行知识检索", resource="search"),
-        PermissionSpec("read", "读取文档", resource="/documents"),
+        PermissionSpec("read", "读取文档", resource="/documents", scope="global"),
+        PermissionSpec("update", "更新自己的订单", resource="order", scope="owner"),
         PermissionSpec("view", "查看文档页面", resource="document-list"),
         PermissionSpec("execute", "导出文档", resource="document-export"),
         PermissionSpec("view", "查看敏感信息 Tab", resource="document-sensitive-tab"),
@@ -68,6 +70,44 @@ async def search(_: dict = Depends(require_permission(
     manifest.permission_code("search", "execute"),
 ))):
     return {"result": "call the real MCP tool here"}
+```
+
+For record-level authorization, register the business record after creation and check the external business ID before read/update/delete:
+
+```python
+instance = client.register_resource_instance(
+    resource_id=manifest.resource_id("order"),
+    external_id=str(order.id),
+    owner_user_id=current_user_id,
+    organization_id=current_org_id,
+)
+
+authz = client.check_resource_or_raise(
+    access_token,
+    manifest.permission_code("order", "update"),
+    resource_id=manifest.resource_id("order"),
+    external_id=str(order.id),
+)
+```
+
+`manifest.resource_id("order")` derives `knowledge:entity:order` from the declared module and resource; application code should not hardcode it. Set `PermissionSpec(..., scope="owner")` or `scope="organization"` for those checks. `global` skips instance ownership checks.
+
+The business database remains the source of truth. Create/update the business record first and then call the idempotent registration method; after deleting the business record, call `client.unregister_resource_instance(manifest.resource_id("order"), str(order.id))`. AuthHub never deletes business records and deliberately rejects deleting a resource definition or module while instance indexes remain.
+
+For a normal FastAPI route, the route dependency can get the external ID from the path parameter directly:
+
+```python
+@app.patch("/orders/{order_id}")
+async def update_order(
+    order_id: str,
+    _: dict = Depends(require_resource_permission(
+        client,
+        manifest.permission_code("order", "update"),
+        manifest.resource_id("order"),
+        "order_id",
+    )),
+):
+    return {"id": order_id}
 ```
 
 `ResourceSpec.mcp_tool("search", ...)` means the upstream service's own tool named `search` is a protected object. It does **not** mean AuthHub contains a built-in search tool.
@@ -107,4 +147,4 @@ The React app calls this endpoint once after login. If the business app stores i
 
 ## Data Scope
 
-`require_permission` handles function-level RBAC, such as whether a user can execute the `search` tool. It intentionally does not decide which documents or orders are visible. The business API must apply its own tenant, organization, ownership, and row-level rules after AuthHub approves the operation.
+`require_permission` handles function-level RBAC, such as whether a user can execute the `search` tool. `require_resource_permission` adds AuthHub's registered owner/organization scope check for one record. The business API still owns business-record existence, tenant rules, transactions, and any richer row-level policy.

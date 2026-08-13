@@ -10,7 +10,7 @@
 
 ## 0. 当前对照结论
 
-当前仓库已经完成的是一个“可本地部署的框架 MVP”，不是设计文档要求的完整生产级 AuthHub。已经具备领域模型、认证/RBAC 基础用例、可注入端口、SQLite 本地持久化兜底、内存缓存兜底、Redis 客户端适配器、可撤销 opaque Token/Session、SQLite 审计、管理 API 和同服务 Admin Web；生产 SQLAlchemy/PostgreSQL/MySQL Repository、生产密码哈希、OpenAPI 契约、请求级安全测试、部署安全策略和 SDK 等仍未完成。
+当前仓库已经完成的是一个“可本地部署的框架 MVP”，不是设计文档要求的完整生产级 AuthHub。已经具备领域模型、认证/RBAC 基础用例、可注入端口、SQLAlchemy 本地持久化、内存缓存兜底、Redis 客户端适配器、可撤销 opaque Token/Session、SQLAlchemy 审计、管理 API 和同服务 Admin Web；生产密码哈希、OpenAPI 契约、请求级安全测试和部署安全策略仍未完成。
 
 因此后续顺序应为：
 
@@ -63,7 +63,7 @@
 - [x] 核心领域逻辑与数据库解耦。
 - [x] 核心领域逻辑与 Redis 解耦。
 - [x] 核心领域逻辑与 Web UI 解耦。
-- [~] 通过端口和依赖注入替换基础设施。
+- [x] 通过端口和依赖注入替换基础设施；默认实现为 SQLAlchemy，内存实现仅用于单元测试。
 - [ ] 保持核心 API、领域模型和权限模型稳定。
 - [ ] 优先简洁、可维护、可扩展，不引入没有实际价值的复杂设计。
 
@@ -73,16 +73,15 @@
 
 - [x] 定义 Repository 抽象端口。
 - [x] 提供仅用于开发/测试的内存 Repository。
-- [x] 提供 SQLite 本地持久化 Repository 兜底。
+- [x] 默认使用 SQLAlchemy Repository；SQLite 仅作为 SQLAlchemy 的开发数据库 URL。
 - [x] 提供 Docker Compose 本地持久化启动方式（SQLite 卷）。
-- [x] SQLite 保存 AuthHub 自身用户、RBAC、模块、资源、会话和审计数据。
-- [ ] 明确数据库连接由宿主服务传入的配置契约。
-- [ ] 实现 SQLAlchemy Repository 适配器。
-- [ ] 支持 PostgreSQL。
-- [ ] 支持 MySQL。
+- [x] SQLAlchemy 保存 AuthHub 自身用户、RBAC、模块、资源定义、资源实例、会话和审计数据。
+- [x] 明确数据库连接由 SQLAlchemy URL 或宿主 Engine 传入的配置契约。
+- [x] 实现 SQLAlchemy Core Repository 适配器。
+- [x] 支持 PostgreSQL（由 SQLAlchemy URL/驱动提供）。
+- [x] 支持 MySQL（由 SQLAlchemy URL/驱动提供）。
 - [ ] 验证 Repository 不依赖具体业务数据库连接生命周期。
-- [ ] 禁止框架自动创建数据库。
-- [ ] 禁止框架自动部署数据库。
+- [x] 不创建或部署外部数据库；只初始化 AuthHub 自身 schema。
 - [ ] 禁止框架自动管理数据库连接池生命周期，除非宿主明确托管。
 - [ ] 设计事务边界和并发更新策略。
 - [ ] 设计数据迁移文件，但迁移执行由宿主或部署系统负责。
@@ -95,7 +94,7 @@
 - [x] 提供接收宿主 redis-py 客户端的 Redis Cache 适配器。
 - [x] Redis 客户端由宿主服务注入。
 - [x] Docker Compose 可启动 Redis，并由 AuthHub 实际用于权限缓存和会话 Token。
-- [x] Redis 不作为最终数据源，SQLite/宿主 Repository 是用户、RBAC、模块和资源真相来源。
+- [x] Redis 不作为最终数据源，SQLAlchemy/宿主 Repository 是用户、RBAC、模块和资源真相来源。
 - [x] 设计并实现 opaque Token/Session 缓存能力。
 - [ ] 设计登录状态缓存能力。
 - [x] 设计权限缓存能力。
@@ -113,7 +112,7 @@
 - [x] 定义 TokenService 端口。
 - [x] 定义 PasswordHasher 端口。
 - [x] 定义 AuditLog 端口。
-- [x] 提供内存 Token 实现、SQLite Token fallback 和 Cache/Redis Token 实现。
+- [x] 提供内存 Token 实现、SQLAlchemy Token 持久化实现和 Cache/Redis Token 实现。
 - [ ] 提供生产级 JWT 实现或可替换 JWT 适配器。
 - [~] 提供 Redis-compatible CacheTokenService；生产密钥、可观测性和高可用策略待补齐。
 - [ ] 支持外部密钥/密钥轮换服务。
@@ -195,9 +194,12 @@
 ### 3.6 Resource 与未来扩展字段
 
 - [x] ResourceDefinition 模型。
-- [x] 资源实例持久化模型（SQLite/内存）。
+- [x] 资源实例持久化模型（SQLAlchemy/内存），记录外部 ID、用户归属和组织归属。
+- [x] 资源实例由业务服务幂等登记/注销；AuthHub 不保存业务字段、不反向修改业务记录。
+- [x] 资源定义/模块/组织删除时阻止遗留资源实例索引。
+- [~] 跨服务创建/更新的最终一致性由业务服务 outbox、重试或对账承担；尚未提供内置消息队列适配器。
 - [x] `resource_type` 枚举与同模块内 `(resource_type, resource_key)` 唯一约束。
-- [ ] 数据权限上下文模型。
+- [x] 数据权限上下文模型：`global`、`owner`、`organization` 范围和资源实例归属。
 - [ ] 条件表达式或策略引用字段。
 - [ ] 保证当前 RBAC 模型不阻塞资源级权限扩展。
 
@@ -215,7 +217,7 @@
 - [ ] 明确模块删除、下线和禁用策略。
 - [ ] 支持菜单元数据（可选，不与前端实现耦合）。
 - [ ] 模块注册权限仅允许系统管理员或服务凭据。
-- [~] SQLite 单操作持久化；完整事务边界待生产 Repository 实现。
+- [~] SQLAlchemy 单操作持久化；跨聚合事务边界和并发更新策略待补充。
 - [ ] 模块注册结果返回新增、更新、未变化统计。
 - [x] 模块同步审计。
 - [ ] 为 MCP Server、MCP Tool、Agent 编写注册示例。
@@ -254,7 +256,7 @@
 - [x] 区分权限不存在。
 - [x] 区分系统管理员。
 - [x] 支持资源和 context 入参占位。
-- [ ] 明确 `resource` 和 `context` 的正式语义。
+- [x] 明确 `resource` 为业务外部标识，`context.resource_instance_id` 指向 AuthHub 归属索引。
 - [ ] 提供 `/check-token`、`/user-info`、`/user-permissions` 的稳定契约。
 - [ ] 明确批量接口部分成功和整体失败策略。
 
@@ -349,9 +351,9 @@
 - [~] role 模块，目前以 application 方法存在。
 - [~] permission 模块，目前以 application 方法存在。
 - [~] module 模块，目前以 application 方法存在。
-- [x] resource 模块：模型、内存/SQLite 持久化、模块同步和查询 API。
-- [x] token 模块：端口、内存/SQLite/Cache 实现、refresh rotation 和用户会话撤销。
-- [x] audit 模块：AuditLog 端口、内存/SQLite 实现及查询 API。
+- [x] resource 模块：定义/实例模型、SQLAlchemy/内存持久化、模块同步和查询 API。
+- [x] token 模块：端口、内存/SQLAlchemy/Cache 实现、refresh rotation 和用户会话撤销。
+- [x] audit 模块：AuditLog 端口、内存/SQLAlchemy 实现及查询 API。
 - [ ] 按模块拆分用例、端口和 API，避免 application.py 继续膨胀。
 - [ ] controller/router 与用例层彻底分离。
 - [ ] 统一 DTO 与领域实体转换。
@@ -448,14 +450,14 @@
 
 - [x] 领域模型和端口。
 - [x] 内存 Repository/Cache/Token/Hasher/Audit 实现。
-- [x] SQLite 数据库和内存缓存 fallback。
+- [x] SQLAlchemy SQLite 数据库 URL 和内存缓存 fallback。
 - [x] Redis 客户端接入适配器。
 - [x] admin bootstrap。
 - [x] login、me、check、batch check、logout、refresh。
 - [x] 基础用户、组织、角色、权限管理用例。
 - [x] 模块注册和资源同步。
 - [x] 权限缓存失效和用户会话撤销。
-- [~] SQLite 审计和查询；生产 AuditLog、失败登录/Token 生命周期审计待补齐。
+- [~] SQLAlchemy 审计和查询；失败登录/Token 生命周期审计待补齐。
 - [ ] 领域模块拆分。
 
 ### Phase 2：生产基础设施

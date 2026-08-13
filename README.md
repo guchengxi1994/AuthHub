@@ -19,7 +19,7 @@ AuthHub 是一个独立的企业级认证与 RBAC 授权基础框架。它只负
        宿主提供的 SQL 数据库、Redis、密钥服务
 ```
 
-`src/auth_hub/domain` 没有任何 Web、ORM 或 Redis 依赖；`src/auth_hub/ports` 是基础设施适配器需要实现的接口；`infrastructure.py` 提供两种兜底/接入方式：本地 SQLite 持久化数据库、内存 Cache，以及可接收宿主 `redis-py` 客户端的 `RedisCache`。框架使用这些连接，但不创建、部署或关闭宿主的数据库/Redis 服务。
+`src/auth_hub/domain` 没有任何 Web、ORM 或 Redis 依赖；`src/auth_hub/ports` 是基础设施适配器需要实现的接口；默认持久化适配器使用 SQLAlchemy Core，数据库 URL 决定 SQLite、PostgreSQL 或 MySQL 方言，并由 `MetaData.create_all()` 初始化 AuthHub 自身的表。Redis 仍由宿主 `redis-py` 客户端接入。框架不会创建、部署或关闭数据库/Redis 服务，也不会创建业务数据表。
 
 ## 授权模型
 
@@ -49,12 +49,12 @@ AuthHub 不会内置或调用你的 MCP Server、MCP Tool、订单 API 或前端
 
 ## 快速启动
 
-核心包零运行时依赖，默认 `AuthHub.local()` 使用 SQLite 文件和内存缓存，可直接开发和测试：
+核心包默认依赖 SQLAlchemy。`AuthHub.local()` 接受 SQLAlchemy URL；不带 scheme 的路径会按 SQLite URL 解析：
 
 ```bash
 pip install -e .
 
-# 默认创建 authhub.db；也可以传入 :memory: 之外的 SQLite 文件路径
+# 默认 URL: sqlite+pysqlite:///authhub.db；也可传 PostgreSQL/MySQL URL
 AUTH_HUB_DATABASE=./var/authhub.db uvicorn auth_hub.main:app --reload
 ```
 
@@ -71,7 +71,7 @@ uvicorn auth_hub.main:app --reload
 pip install 'auth-hub-client @ file:///path/to/auth-hub/sdk[fastapi]'
 ```
 
-默认初始化一个系统级 `admin` 用户，开发密码由 `AuthHubSettings(admin_password=...)` 指定；本地缺少外部数据库时使用 SQLite，缺少 Redis 时使用内存缓存。生产环境应将宿主提供的 SQLAlchemy/其他数据库 Repository、RedisCache、生产密码哈希器和 TokenService 注入 `AuthHub(...)`。
+默认初始化一个系统级 `admin` 用户，开发密码由 `AuthHubSettings(admin_password=...)` 指定；缺少 Redis 时使用内存缓存。生产环境可传入宿主已有 SQLAlchemy Engine，或通过环境变量直接使用其 PostgreSQL/MySQL URL。
 
 ## Docker Compose
 
@@ -81,23 +81,24 @@ cp .env.example .env
 docker compose up --build
 ```
 
-服务地址为 `http://localhost:8000`，可通过 `AUTH_HUB_PORT` 覆盖端口。Compose 会启动 AuthHub 和 Redis；AuthHub 使用 Redis 保存权限缓存和可撤销的 opaque Token/Session，使用具名卷中的 SQLite 文件保存 AuthHub 自身的用户、RBAC、模块和审计数据。停止容器不会删除数据；需要清空本地环境时执行 `docker compose down -v`。
+服务地址为 `http://localhost:8000`，可通过 `AUTH_HUB_PORT` 覆盖端口。Compose 会启动 AuthHub 和 Redis；AuthHub 使用 Redis 保存权限缓存，使用 SQLAlchemy 的 SQLite URL 和具名卷保存 AuthHub 自身的用户、RBAC、模块、资源实例、会话和审计数据。停止容器不会删除数据；需要清空本地环境时执行 `docker compose down -v`。
 
 管理端在 `http://localhost:8000/admin`，首次登录使用 `.env` 中的管理员用户名和密码。
 
 管理端前端位于 `src/auth_hub/web/`：`templates/admin.html` 是页面结构，`static/admin.css` 是管理端样式，`static/admin.js` 是 API 交互逻辑。FastAPI 仅将它们作为 `/admin` 和 `/admin/assets/*` 提供，Python 后端不内嵌前端代码。构建 wheel 时会一并包含这些资源。
 
-这是一个可零配置启动的开发/单机部署组合。生产环境应将 `AuthHub(...)` 注入宿主提供的 PostgreSQL/MySQL Repository、Redis 客户端和密钥服务；不会由 AuthHub 创建、部署或关闭这些外部基础设施。
+这是一个可零配置启动的开发/单机部署组合。生产环境将 `AUTH_HUB_DATABASE` 改为 PostgreSQL/MySQL SQLAlchemy URL，并接入 Redis 客户端和密钥服务；不会由 AuthHub 创建、部署或关闭这些外部基础设施。
 
 ## 当前 API
 
 - `POST /api/auth/login`：用户名密码登录并签发 Token
 - `POST /api/auth/refresh`、`POST /api/auth/logout`
 - `GET /api/auth/me`、`POST /api/auth/check-token`
-- `POST /api/auth/check`、`POST /api/auth/check/batch`
+- `POST /api/auth/check`、`POST /api/auth/check/batch`、`POST /api/auth/check-resource`
 - `GET /api/auth/user-permissions`
 - `POST /api/modules/register`：幂等保存业务模块及权限元数据
-- `POST /api/resources`、`DELETE /api/resources/{resource_id}`：管理模块下的受控资源
+- `POST /api/resources`、`DELETE /api/resources/{resource_id}`：管理模块下的资源定义
+- `POST /api/resource-instances`、`DELETE /api/resource-instances?resource_id=...&external_id=...`：业务服务幂等登记/注销记录的外部 ID、用户归属和组织归属
 - `POST /api/permissions`：创建资源操作权限，并可同时授予角色
 
 鉴权失败统一返回 `code`，包括 `UNAUTHENTICATED`、`TOKEN_INVALID`、`USER_DISABLED`、`PERMISSION_DENIED` 等。
@@ -109,19 +110,36 @@ docker compose up --build
 ```python
 from auth_hub import AuthHub, AuthHubSettings, RedisCache
 
-# repository 使用宿主已有 SQLAlchemy session/连接实现 AuthHubRepository。
-repository = MySqlAuthHubRepository(session_factory)
+# SQLite、PostgreSQL、MySQL 使用同一个 SQLAlchemy Repository。
+repository = SQLAlchemyAuthHubRepository("postgresql+psycopg://user:password@db/authhub")
 redis_cache = RedisCache(redis_client, namespace="my-service:authhub:")
 hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log, AuthHubSettings())
 ```
 
-如果宿主没有 Redis，可以先使用 `InMemoryCache()`；如果没有数据库连接，可以使用 `AuthHub.local("./authhub.db")`，它会用 SQLite 持久化 AuthHub 自己的数据。两种 fallback 都是为了开发、测试和单机部署，生产环境仍建议使用宿主的数据库和 Redis。
+如果宿主没有 Redis，可以先使用 `InMemoryCache()`；数据库始终通过 SQLAlchemy 接入，开发环境使用 SQLite URL，生产环境直接替换为宿主的 PostgreSQL/MySQL URL 或 Engine。缺少 SQLAlchemy 会在启动时明确报错，绝不会回退到裸 `sqlite3`。
 
 框架不会创建或部署外部基础设施，也不会关闭宿主传入的数据库连接池或 Redis 客户端。
 
+## 业务资源实例归属
+
+资源定义例如 `orders:entity:order` 只描述哪类对象需要授权。业务服务创建订单后注册归属索引，不上传订单业务字段：
+
+```json
+{
+  "resource_id": "orders:entity:order",
+  "external_id": "order-10001",
+  "owner_user_id": "user-uuid",
+  "organization_id": "org-uuid"
+}
+```
+
+权限范围可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先检查角色权限，再检查此实例归属。系统超级管理员对已存在的资源实例始终允许操作。业务数据库仍是订单、文档等字段的唯一真相源。
+
+业务服务在自身事务成功后幂等调用“登记/更新归属”；删除业务记录后幂等调用“注销”。这是一致性索引，不是业务数据副本：短暂同步失败应由业务服务通过 outbox、重试队列或定期对账补偿，不能由 AuthHub 反向修改业务表。为防止丢失仍在使用的归属索引，资源定义或模块在存在资源实例时会拒绝删除。
+
 ## 后续阶段
 
-1. 完成 SQLAlchemy/PostgreSQL/MySQL 仓储适配器和 Redis 缓存适配器（仍由宿主传入连接）。
-2. 固化 OpenAPI/错误码/Token 响应契约。
+1. 固化 OpenAPI/错误码/Token 响应契约。
+2. 为 SQLAlchemy Repository 提供迁移脚本、事务边界与并发更新策略。
 3. 固化管理端的 OpenAPI/静态资源发布和端到端测试。
 4. 发布 `auth-hub-client` 到私有 PyPI，并以版本化契约测试保证兼容性。

@@ -46,7 +46,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.get("/api/admin/overview")
     async def admin_overview(authorization: Optional[str] = Header(None)):
         _require_admin(hub, authorization)
-        return {"users": len(hub.list_users()), "organizations": len(hub.list_organizations()), "roles": len(hub.list_roles()), "permissions": len(hub.list_permissions()), "modules": len(hub.list_modules()), "resources": len(hub.list_resources()), "audit_events": len(hub.list_audit_events(limit=500))}
+        return {"users": len(hub.list_users()), "organizations": len(hub.list_organizations()), "roles": len(hub.list_roles()), "permissions": len(hub.list_permissions()), "modules": len(hub.list_modules()), "resources": len(hub.list_resources()), "resource_instances": len(hub.repository.list_resource_instances()), "audit_events": len(hub.list_audit_events(limit=500))}
 
     @app.post("/api/auth/login")
     async def login(payload: Dict[str, Any]): return hub.login(str(payload.get("username", "")), str(payload.get("password", "")))
@@ -66,6 +66,9 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.post("/api/auth/check/batch")
     async def check_batch(payload: Dict[str, Any], authorization: Optional[str] = Header(None)): return {"results": [result.to_dict() for result in hub.check_permissions(_bearer(authorization), payload.get("permissions", []), resource=payload.get("resource"), context=payload.get("context"))]}
+
+    @app.post("/api/auth/check-resource")
+    async def check_resource(payload: Dict[str, Any], authorization: Optional[str] = Header(None)): return hub.can_access_resource(_bearer(authorization), str(payload.get("permission", "")), str(payload.get("resource_id", "")), str(payload.get("external_id", "")), context=payload.get("context")).to_dict()
 
     @app.post("/api/auth/check-token")
     async def check_token(authorization: Optional[str] = Header(None)): return hub.user_dict(hub.authenticate(_bearer(authorization)))
@@ -181,7 +184,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.post("/api/permissions")
     async def create_permission(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
         actor = _require_admin(hub, authorization)
-        permission = hub.create_permission(payload.get("code"), str(payload.get("name", "")), description=payload.get("description"), kind=str(payload.get("kind", "operation")), module_id=payload.get("module_id"), resource_id=payload.get("resource_id"), action=payload.get("action"), role_ids=payload.get("role_ids") or [], metadata=payload.get("metadata"), actor_id=actor.id)
+        permission = hub.create_permission(payload.get("code"), str(payload.get("name", "")), description=payload.get("description"), kind=str(payload.get("kind", "operation")), module_id=payload.get("module_id"), resource_id=payload.get("resource_id"), action=payload.get("action"), scope=str(payload.get("scope") or "global"), role_ids=payload.get("role_ids") or [], metadata=payload.get("metadata"), actor_id=actor.id)
         return hub.permission_dict(permission)
 
     @app.patch("/api/permissions/{permission_code:path}")
@@ -213,6 +216,30 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     async def delete_resource(resource_id: str, authorization: Optional[str] = Header(None)):
         actor = _require_admin(hub, authorization)
         hub.delete_resource(resource_id, actor_id=actor.id)
+        return {"success": True}
+
+    @app.get("/api/resource-instances")
+    async def list_resource_instances(resource_id: Optional[str] = None, owner_user_id: Optional[str] = None, organization_id: Optional[str] = None, authorization: Optional[str] = Header(None)):
+        _require_admin(hub, authorization)
+        return {"items": [hub.resource_instance_dict(item) for item in hub.repository.list_resource_instances(resource_id, owner_user_id=owner_user_id, organization_id=organization_id)]}
+
+    @app.post("/api/resource-instances")
+    async def register_resource_instance(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None)):
+        actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
+        changes = {key: payload[key] for key in ("owner_user_id", "organization_id", "metadata") if key in payload}
+        instance = hub.register_resource_instance(str(payload.get("resource_id") or ""), str(payload.get("external_id") or ""), actor_id=actor_id, **changes)
+        return hub.resource_instance_dict(instance)
+
+    @app.delete("/api/resource-instances")
+    async def unregister_resource_instance(resource_id: str, external_id: str, authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None)):
+        actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
+        hub.delete_resource_instance_by_external_id(resource_id, external_id, actor_id=actor_id)
+        return {"success": True, "resource_id": resource_id, "external_id": external_id}
+
+    @app.delete("/api/resource-instances/by-id/{instance_id}")
+    async def delete_resource_instance(instance_id: str, authorization: Optional[str] = Header(None)):
+        actor = _require_admin(hub, authorization)
+        hub.delete_resource_instance(instance_id, actor_id=actor.id)
         return {"success": True}
 
     @app.delete("/api/modules/{module_id}")

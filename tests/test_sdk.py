@@ -21,6 +21,9 @@ class ClientSdkTests(unittest.TestCase):
         self.assertEqual(payload["resources"][0]["resource_type"], "mcp_tool")
         self.assertEqual(payload["resources"][0]["resource_key"], "search")
         self.assertEqual(manifest.permission_code("search", "execute"), "knowledge:mcp_tool:search:execute")
+        self.assertEqual(manifest.resource_id("search"), "knowledge:mcp_tool:search")
+        self.assertEqual(payload["resources"][0]["id"], "knowledge:mcp_tool:search")
+        self.assertEqual(payload["permissions"][0]["resource_id"], "knowledge:mcp_tool:search")
 
     def test_manifest_registration_resolves_resources_and_permissions(self):
         hub = AuthHub.in_memory()
@@ -37,6 +40,14 @@ class ClientSdkTests(unittest.TestCase):
         self.assertEqual(permission.metadata["resource_type"], "mcp_tool")
         self.assertEqual(permission.metadata["resource_key"], "search")
         self.assertTrue(permission.metadata["resource_id"])
+
+    def test_manifest_resource_id_requires_declared_module_and_resource(self):
+        manifest = ModuleManifest(name="No ID", resources=[ResourceSpec.entity("order", "Order")])
+        with self.assertRaises(ValueError):
+            manifest.resource_id("order")
+        manifest = ModuleManifest(module_id="orders", name="Orders", resources=[])
+        with self.assertRaises(ValueError):
+            manifest.resource_id("order")
 
     def test_registration_key_allows_service_sync_without_admin_token(self):
         hub = AuthHub.in_memory(AuthHubSettings(module_registration_key="test-registration-key"))

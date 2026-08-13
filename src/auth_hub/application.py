@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .domain.errors import AuthenticationError, AuthorizationError, ConflictError, NotFoundError, ValidationError
-from .domain.models import AuditEvent, AuthorizationResult, ModuleDefinition, Organization, Permission, ResourceDefinition, Role, User, new_id
-from .infrastructure import CacheTokenService, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, InMemoryTokenService, SimplePasswordHasher, SQLiteAuditLog, SQLiteAuthHubRepository, SQLiteTokenService
+from .domain.models import AuditEvent, AuthorizationResult, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, Role, User, new_id
+from .infrastructure import CacheTokenService, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, InMemoryTokenService, SimplePasswordHasher
+from .sqlalchemy_infrastructure import SQLAlchemyAuthHubRepository, SQLAlchemyAuditLog, SQLAlchemyTokenService
 from .ports.repositories import AuthHubRepository
 from .ports.services import AuditLog, Cache, PasswordHasher, TokenService
 
@@ -23,6 +24,7 @@ RESOURCE_ACTIONS = {
     "ui_component": frozenset({"view", "manage"}),
     "custom": frozenset({"view", "read", "create", "update", "delete", "execute", "manage"}),
 }
+RESOURCE_SCOPES = frozenset({"global", "owner", "organization"})
 
 
 def _registered_permission_code(module_id: str, permission: Mapping[str, Any]) -> str:
@@ -56,16 +58,16 @@ class AuthHub:
         return service
 
     @classmethod
-    def local(cls, database_path: str = "authhub.db", settings: AuthHubSettings = AuthHubSettings(), *, cache: Optional[Cache] = None) -> "AuthHub":
-        """Create a locally usable instance backed by SQLite and memory cache.
+    def local(cls, database_path: str = "sqlite+pysqlite:///authhub.db", settings: AuthHubSettings = AuthHubSettings(), *, cache: Optional[Cache] = None) -> "AuthHub":
+        """Create the default SQLAlchemy-backed instance.
 
-        SQLite is a fallback for development/test environments, not a claim
-        that AuthHub owns the production database. A host can replace the
-        repository and cache independently through the normal constructor.
+        ``database_path`` accepts a full SQLAlchemy URL. A plain path is
+        treated as a SQLite URL for local development.
         """
         active_cache = cache or InMemoryCache()
-        tokens: TokenService = CacheTokenService(active_cache) if cache else SQLiteTokenService(database_path)
-        service = cls(SQLiteAuthHubRepository(database_path), active_cache, tokens, SimplePasswordHasher(), SQLiteAuditLog(database_path), settings)
+        repository = SQLAlchemyAuthHubRepository(database_path)
+        tokens: TokenService = CacheTokenService(active_cache) if cache else SQLAlchemyTokenService(repository.engine)
+        service = cls(repository, active_cache, tokens, SimplePasswordHasher(), SQLAlchemyAuditLog(repository.engine), settings)
         service.bootstrap()
         return service
 
@@ -165,6 +167,8 @@ class AuthHub:
     def delete_organization(self, organization_id: str, *, actor_id: Optional[str] = None) -> None:
         self._organization_or_raise(organization_id)
         if any(org.parent_id == organization_id for org in self.repository.list_organizations()): raise ValidationError("an organization with children cannot be deleted")
+        if self.repository.list_resource_instances(organization_id=organization_id):
+            raise ValidationError("organization is still referenced by resource instances")
         self.repository.delete_organization(organization_id)
         self._audit("organization.delete", actor_id, "organization", organization_id, "success")
 
@@ -225,12 +229,13 @@ class AuthHub:
         self._role_or_raise(role_id)
         return [permission for code in self.repository.role_permission_codes(role_id) if (permission := self.repository.get_permission(code))]
 
-    def create_permission(self, code: Optional[str], name: str, *, description: Optional[str] = None, kind: str = "operation", module_id: Optional[str] = None, resource_id: Optional[str] = None, action: Optional[str] = None, role_ids: Optional[Sequence[str]] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> Permission:
+    def create_permission(self, code: Optional[str], name: str, *, description: Optional[str] = None, kind: str = "operation", module_id: Optional[str] = None, resource_id: Optional[str] = None, action: Optional[str] = None, scope: str = "global", role_ids: Optional[Sequence[str]] = None, metadata: Optional[Mapping[str, Any]] = None, actor_id: Optional[str] = None) -> Permission:
         if module_id:
             self.get_module(module_id)
         role_ids = list(dict.fromkeys(str(item) for item in (role_ids or [])))
         for role_id in role_ids: self._role_or_raise(role_id)
         permission_metadata = dict(metadata or {})
+        if scope not in RESOURCE_SCOPES: raise ValidationError("unsupported permission scope")
         if resource_id:
             resource = self.repository.get_resource(resource_id)
             if not resource: raise NotFoundError("resource", resource_id)
@@ -239,7 +244,9 @@ class AuthHub:
             if action not in RESOURCE_ACTIONS[resource.resource_type]: raise ValidationError("action is not supported by this resource type")
             code = code or f"{module_id}:{resource.resource_type}:{resource.resource_key}:{action}"
             kind = "api" if resource.resource_type == "api" else "resource"
-            permission_metadata.update({"resource_id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "action": action})
+            permission_metadata.update({"resource_id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "action": action, "scope": scope})
+        elif scope != "global":
+            raise ValidationError("owner or organization scope requires a resource")
         if not code or not name: raise ValidationError("permission code and name are required")
         if self.repository.get_permission(code): raise ConflictError("permission code already exists")
         permission = self.repository.save_permission(Permission(new_id(), code, name, module_id=module_id, description=description, kind=kind, metadata=permission_metadata))
@@ -272,11 +279,57 @@ class AuthHub:
         self._audit("resource.create", actor_id, "resource", resource.id, "success")
         return resource
 
+    def register_resource_instance(self, resource_id: str, external_id: str, *, owner_user_id: Any = _UNSET, organization_id: Any = _UNSET, metadata: Any = _UNSET, actor_id: Optional[str] = None) -> ResourceInstance:
+        resource = self.repository.get_resource(resource_id)
+        if not resource: raise NotFoundError("resource", resource_id)
+        if not external_id: raise ValidationError("external_id is required")
+        existing = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
+        resolved_owner = existing.owner_user_id if owner_user_id is _UNSET and existing else (None if owner_user_id is _UNSET else owner_user_id)
+        resolved_org = existing.organization_id if organization_id is _UNSET and existing else (None if organization_id is _UNSET else organization_id)
+        resolved_metadata = dict(existing.metadata) if metadata is _UNSET and existing else ({} if metadata is _UNSET else dict(metadata or {}))
+        if resolved_owner: self._user_or_raise(str(resolved_owner))
+        if resolved_org: self._organization_or_raise(str(resolved_org))
+        instance = existing.with_changes(owner_user_id=resolved_owner, organization_id=resolved_org, metadata=resolved_metadata) if existing else ResourceInstance(new_id(), resource_id, external_id, resolved_owner, resolved_org, resolved_metadata)
+        instance = self.repository.save_resource_instance(instance)
+        self._audit("resource.instance.register", actor_id, "resource_instance", instance.id, "success", {"resource_id": resource_id, "external_id": external_id, "owner_user_id": resolved_owner, "organization_id": resolved_org})
+        return instance
+
+    def delete_resource_instance(self, instance_id: str, *, actor_id: Optional[str] = None) -> None:
+        instance = self.resource_instance(instance_id)
+        self.repository.delete_resource_instance(instance.id)
+        self._audit("resource.instance.delete", actor_id, "resource_instance", instance.id, "success", {"resource_id": instance.resource_id, "external_id": instance.external_id})
+
+    def delete_resource_instance_by_external_id(self, resource_id: str, external_id: str, *, actor_id: Optional[str] = None) -> None:
+        instance = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
+        if not instance: return
+        self.delete_resource_instance(instance.id, actor_id=actor_id)
+
+    def resource_instance(self, instance_id: str) -> ResourceInstance:
+        instance = self.repository.get_resource_instance(instance_id)
+        if not instance: raise NotFoundError("resource_instance", instance_id)
+        return instance
+
+    def can_access_resource_instance(self, access_token: Optional[str], permission: str, instance_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
+        instance = self.resource_instance(instance_id)
+        return self.check_permission(access_token, permission, resource=instance.external_id, context={"resource_instance_id": instance.id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, **dict(context or {})})
+
+    def can_access_resource(self, access_token: Optional[str], permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
+        instance = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
+        if not instance:
+            try:
+                user = self.authenticate(access_token)
+            except AuthenticationError as error:
+                return AuthorizationResult(False, False, permission, reason=error.code)
+            return AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
+        return self.can_access_resource_instance(access_token, permission, instance.id, context=context)
+
     def delete_resource(self, resource_id: str, *, actor_id: Optional[str] = None) -> None:
         resource = self.repository.get_resource(resource_id)
         if not resource: raise NotFoundError("resource", resource_id)
         if any(item.metadata.get("resource_id") == resource_id for item in self.repository.list_permissions()):
             raise ValidationError("resource is still referenced by permissions")
+        if self.repository.list_resource_instances(resource_id):
+            raise ValidationError("resource is still referenced by resource instances")
         self.repository.delete_resource(resource_id)
         self._audit("resource.delete", actor_id, "resource", resource_id, "success")
 
@@ -309,9 +362,22 @@ class AuthHub:
         permissions = self.cache.get(cache_key)
         if permissions is None:
             permissions = sorted(self.user_permissions(user.id)); self.cache.set(cache_key, permissions, self.settings.permission_cache_ttl)
-        allowed = permission in permissions
-        result = AuthorizationResult(allowed, True, permission, user.id, None if allowed else "PERMISSION_DENIED", "rbac" if allowed else None)
-        self._audit("authorization.check", user.id, "permission", permission, "allowed" if allowed else "denied", {"resource": resource, "context": dict(context or {})})
+        if permission not in permissions:
+            result = AuthorizationResult(False, True, permission, user.id, reason="PERMISSION_DENIED")
+        else:
+            scope = str(known_permission.metadata.get("scope") or "global")
+            result = AuthorizationResult(True, True, permission, user.id, matched_by="rbac")
+            if scope != "global":
+                instance_id = str((context or {}).get("resource_instance_id") or "")
+                instance = self.repository.get_resource_instance(instance_id) if instance_id else None
+                expected_resource_id = known_permission.metadata.get("resource_id")
+                if not instance or (expected_resource_id and instance.resource_id != expected_resource_id):
+                    result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
+                elif scope == "owner" and instance.owner_user_id != user.id:
+                    result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_OWNERSHIP_DENIED")
+                elif scope == "organization" and (not instance.organization_id or instance.organization_id not in self.repository.user_organization_ids(user.id)):
+                    result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_ORGANIZATION_DENIED")
+        self._audit("authorization.check", user.id, "permission", permission, "allowed" if result.allowed else "denied", {"resource": resource, "context": dict(context or {})})
         return result
 
     def check_permissions(self, access_token: Optional[str], permissions: Sequence[str], *, resource: Optional[str] = None, context: Optional[Mapping[str, Any]] = None) -> List[AuthorizationResult]:
@@ -362,6 +428,8 @@ class AuthHub:
             for item in self.repository.list_permissions()
         ):
             raise ValidationError("registered resource is still referenced by permissions")
+        if any(self.repository.list_resource_instances(resource_id) for resource_id in removed_resource_ids):
+            raise ValidationError("registered resource is still referenced by resource instances")
         declared_resources = {
             str(item.get("id") or f"{module_id}:{item.get('resource_type') or item.get('type')}:{item.get('resource_key') or item.get('key')}"): item
             for item in resources
@@ -386,6 +454,9 @@ class AuthHub:
                 if permission.get("resource_type") and permission["resource_type"] != resource_type: raise ValidationError("registered permission resource type does not match")
                 if permission.get("resource_key") and permission["resource_key"] != resource_key: raise ValidationError("registered permission resource key does not match")
                 permission.update({"id": _registered_permission_code(module_id, {**permission, "resource_type": resource_type, "resource_key": resource_key, "action": action}), "resource_id": resource_id, "resource_type": resource_type, "resource_key": resource_key, "action": action})
+                scope = str(permission.get("scope") or "global")
+                if scope not in RESOURCE_SCOPES: raise ValidationError("unsupported permission scope")
+                permission["scope"] = scope
             normalized_permissions.append(permission)
         module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), normalized_permissions, list(apis or []), resources)
         module = self.repository.save_module(module)
@@ -426,6 +497,8 @@ class AuthHub:
         return module
     def delete_module(self, module_id: str, *, actor_id: Optional[str] = None) -> None:
         self.get_module(module_id)
+        if any(self.repository.list_resource_instances(resource.id) for resource in self.repository.list_resources(module_id)):
+            raise ValidationError("module resources are still referenced by resource instances")
         for permission in [item for item in self.repository.list_permissions() if item.module_id == module_id]: self.repository.delete_permission(permission.code)
         self.repository.delete_module(module_id)
         for user in self.repository.list_users(): self.invalidate_user_permissions(user.id)
@@ -465,7 +538,9 @@ class AuthHub:
     @staticmethod
     def role_dict(role: Role) -> Dict[str, Any]: return {"id": role.id, "code": role.code, "name": role.name, "description": role.description, "enabled": role.enabled, "built_in": role.built_in}
     @staticmethod
-    def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
+    def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "scope": permission.metadata.get("scope", "global"), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
+    @staticmethod
+    def resource_instance_dict(instance: ResourceInstance) -> Dict[str, Any]: return {"id": instance.id, "resource_id": instance.resource_id, "external_id": instance.external_id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, "metadata": dict(instance.metadata), "created_at": instance.created_at.isoformat(), "updated_at": instance.updated_at.isoformat()}
     @staticmethod
     def resource_dict(resource: ResourceDefinition) -> Dict[str, Any]: return {"id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "name": resource.name, "module_id": resource.module_id, "metadata": dict(resource.metadata)}
     @staticmethod

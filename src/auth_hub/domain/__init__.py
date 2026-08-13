@@ -6,13 +6,13 @@ from .models import (
     Organization,
     Permission,
     ResourceDefinition,
+    ResourceInstance,
     Role,
     User,
 )
 
 __all__ = [
     "AuditEvent", "AuthenticationError", "AuthorizationError", "AuthorizationResult", "ConflictError",
-    "ModuleDefinition", "NotFoundError", "Organization", "Permission", "ResourceDefinition", "Role",
+    "ModuleDefinition", "NotFoundError", "Organization", "Permission", "ResourceDefinition", "ResourceInstance", "Role",
     "User", "ValidationError",
 ]
-

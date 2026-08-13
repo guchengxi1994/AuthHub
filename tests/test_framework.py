@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from auth_hub import AuthHub, AuthHubSettings, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, RedisCache, SQLiteAuthHubRepository
+from auth_hub import AuthHub, AuthHubSettings, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, RedisCache, SQLAlchemyAuthHubRepository
 from auth_hub.domain.errors import AuthenticationError, ValidationError
 from auth_hub.infrastructure import CacheTokenService, InMemoryTokenService, SimplePasswordHasher
 from auth_hub.domain.models import Permission, Role, User, new_id
@@ -100,6 +100,62 @@ class FrameworkTests(unittest.TestCase):
         tokens = hub.login("admin", "change-me-now")
         self.assertIn("orders:page:list:view", hub.user_permissions(hub.authenticate(tokens["access_token"]).id))
 
+    def test_resource_instance_owner_scope_and_super_admin_override(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("orders", "Orders")
+        resource = hub.create_resource(module.id, "entity", "order", "Orders")
+        role = hub.create_role("order-owner", "Order owner")
+        permission = hub.create_permission(None, "Update own order", module_id=module.id, resource_id=resource.id, action="update", scope="owner", role_ids=[role.id])
+        alice = hub.create_user("alice", "password", role_ids=[role.id])
+        bob = hub.create_user("bob", "password", role_ids=[role.id])
+        instance = hub.register_resource_instance(resource.id, "order-100", owner_user_id=alice.id)
+        alice_token = hub.login("alice", "password")["access_token"]
+        bob_token = hub.login("bob", "password")["access_token"]
+        admin_token = hub.login("admin", "change-me-now")["access_token"]
+        self.assertTrue(hub.can_access_resource_instance(alice_token, permission.code, instance.id).allowed)
+        self.assertEqual(hub.can_access_resource_instance(bob_token, permission.code, instance.id).reason, "RESOURCE_OWNERSHIP_DENIED")
+        self.assertTrue(hub.can_access_resource_instance(admin_token, permission.code, instance.id).allowed)
+
+    def test_resource_instance_registration_is_idempotent_and_delete_is_safe(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("orders", "Orders")
+        resource = hub.create_resource(module.id, "entity", "order", "Orders")
+        owner = hub.create_user("owner", "password")
+        instance = hub.register_resource_instance(resource.id, "order-100", owner_user_id=owner.id, metadata={"source": "orders"})
+        updated = hub.register_resource_instance(resource.id, "order-100", organization_id=None)
+        self.assertEqual(updated.id, instance.id)
+        self.assertEqual(updated.owner_user_id, owner.id)
+        self.assertEqual(updated.metadata, {"source": "orders"})
+        hub.delete_resource_instance_by_external_id(resource.id, "order-100")
+        hub.delete_resource_instance_by_external_id(resource.id, "order-100")
+        self.assertIsNone(hub.repository.get_resource_instance_by_external_id(resource.id, "order-100"))
+
+    def test_resource_and_module_delete_reject_existing_instance_indexes(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("orders", "Orders")
+        resource = hub.create_resource(module.id, "entity", "order", "Orders")
+        hub.register_resource_instance(resource.id, "order-100")
+        with self.assertRaises(ValidationError):
+            hub.delete_resource(resource.id)
+        with self.assertRaises(ValidationError):
+            hub.delete_module(module.id)
+
+    def test_resource_instance_organization_scope(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("datasets", "Datasets")
+        resource = hub.create_resource(module.id, "entity", "dataset", "Datasets")
+        engineering = hub.create_organization("Engineering")
+        sales = hub.create_organization("Sales")
+        role = hub.create_role("dataset-org-reader", "Dataset organization reader")
+        permission = hub.create_permission(None, "Read organization dataset", module_id=module.id, resource_id=resource.id, action="read", scope="organization", role_ids=[role.id])
+        hub.create_user("engineer", "password", organization_ids=[engineering.id], role_ids=[role.id])
+        hub.create_user("seller", "password", organization_ids=[sales.id], role_ids=[role.id])
+        instance = hub.register_resource_instance(resource.id, "dataset-100", organization_id=engineering.id)
+        engineer_token = hub.login("engineer", "password")["access_token"]
+        seller_token = hub.login("seller", "password")["access_token"]
+        self.assertTrue(hub.can_access_resource_instance(engineer_token, permission.code, instance.id).allowed)
+        self.assertEqual(hub.can_access_resource_instance(seller_token, permission.code, instance.id).reason, "RESOURCE_ORGANIZATION_DENIED")
+
     def test_module_sync_cannot_remove_a_resource_referenced_by_a_permission(self):
         hub = AuthHub.in_memory()
         hub.register_module("orders", "Orders", resources=[{"resource_type": "entity", "resource_key": "order", "name": "Orders"}])
@@ -118,13 +174,27 @@ class FrameworkTests(unittest.TestCase):
         self.assertEqual(hub.list_resources(module.id), [])
         self.assertIsNone(hub.repository.get_permission(permission.code))
 
-    def test_sqlite_fallback_persists_framework_data(self):
+    def test_sqlalchemy_sqlite_persists_framework_data(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "authhub.sqlite3")
             first = AuthHub.local(path, AuthHubSettings(admin_password="local-password"))
+            self.assertIsInstance(first.repository, SQLAlchemyAuthHubRepository)
             first.create_user("persistent", "password")
             second = AuthHub.local(path, AuthHubSettings(admin_password="local-password"))
             self.assertIsNotNone(second.repository.get_user_by_username("persistent"))
+
+    def test_sqlalchemy_persists_resource_instance_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "authhub.sqlite3")
+            first = AuthHub.local(path)
+            module = first.register_module("orders", "Orders")
+            resource = first.create_resource(module.id, "entity", "order", "Orders")
+            owner = first.create_user("owner", "password")
+            instance = first.register_resource_instance(resource.id, "order-100", owner_user_id=owner.id)
+            second = AuthHub.local(path)
+            restored = second.repository.get_resource_instance_by_external_id(resource.id, "order-100")
+            self.assertEqual(restored.id, instance.id)
+            self.assertEqual(restored.owner_user_id, owner.id)
 
     def test_redis_cache_uses_host_supplied_client_and_namespace(self):
         class FakeRedis:
