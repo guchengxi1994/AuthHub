@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -21,6 +22,7 @@ from .ports.services import Cache
 
 
 WEB_ROOT = Path(__file__).with_name("web")
+logger = logging.getLogger(__name__)
 
 
 def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "authhub.db", cache: Optional[Cache] = None, settings: AuthHubSettings = AuthHubSettings()) -> Any:
@@ -224,14 +226,14 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         return {"items": [hub.resource_instance_dict(item) for item in hub.repository.list_resource_instances(resource_id, owner_user_id=owner_user_id, organization_id=organization_id)]}
 
     @app.post("/api/resource-instances")
-    async def register_resource_instance(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None)):
+    async def register_resource_instance(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):
         actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
         changes = {key: payload[key] for key in ("owner_user_id", "organization_id", "metadata") if key in payload}
         instance = hub.register_resource_instance(str(payload.get("resource_id") or ""), str(payload.get("external_id") or ""), actor_id=actor_id, **changes)
         return hub.resource_instance_dict(instance)
 
     @app.delete("/api/resource-instances")
-    async def unregister_resource_instance(resource_id: str, external_id: str, authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None)):
+    async def unregister_resource_instance(resource_id: str, external_id: str, authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):
         actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
         hub.delete_resource_instance_by_external_id(resource_id, external_id, actor_id=actor_id)
         return {"success": True, "resource_id": resource_id, "external_id": external_id}
@@ -252,7 +254,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         return {"items": [hub.audit_event_dict(event) for event in hub.list_audit_events(limit=limit, actor_id=actor_id, action=action)]}
 
     @app.post("/api/modules/register")
-    async def register_module(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None)):
+    async def register_module(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):
         actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
         return hub.register_module(payload.get("module_id") or payload.get("moduleId"), str(payload.get("module_name") or payload.get("moduleName") or ""), description=payload.get("description"), permissions=payload.get("permissions"), apis=payload.get("apis"), resources=payload.get("resources"), metadata=payload.get("metadata"), actor_id=actor_id).to_dict()
 
@@ -271,6 +273,12 @@ def _module_registrar_actor(hub: AuthHub, authorization: Optional[str], registra
     configured_key = hub.settings.module_registration_key
     if configured_key and registration_key and hmac.compare_digest(configured_key, registration_key):
         return "service:module-registration"
+    logger.warning(
+        "module registration authentication failed configured_key=%s supplied_key=%s bearer_token=%s",
+        bool(configured_key),
+        bool(registration_key),
+        bool(_bearer(authorization)),
+    )
     return _require_admin(hub, authorization).id
 
 

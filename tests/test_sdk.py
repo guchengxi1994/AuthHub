@@ -3,6 +3,8 @@ import sys
 import unittest
 from datetime import timedelta
 
+from fastapi.testclient import TestClient
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk"))
 
 from auth_hub import AuthHub, AuthHubSettings
@@ -55,6 +57,20 @@ class ClientSdkTests(unittest.TestCase):
         self.assertEqual(_module_registrar_actor(hub, None, "test-registration-key"), "service:module-registration")
         with self.assertRaises(Exception):
             _module_registrar_actor(hub, None, "wrong-key")
+
+    def test_registration_endpoint_accepts_sdk_header_name(self):
+        from auth_hub.api import create_app
+
+        app = create_app(auth_hub=AuthHub.in_memory(AuthHubSettings(module_registration_key="test-registration-key")))
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/modules/register",
+                headers={"X-AuthHub-Registration-Key": "test-registration-key"},
+                json={"module_id": "sdk-probe", "module_name": "SDK probe", "resources": [], "permissions": []},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "sdk-probe")
 
     def test_sqlalchemy_outbox_decorator_is_transactional_and_dispatches_idempotently(self):
         from sqlalchemy import create_engine, select

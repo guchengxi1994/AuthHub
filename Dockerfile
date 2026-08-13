@@ -10,7 +10,7 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY sdk ./sdk
 
-RUN pip install --no-cache-dir ".[web,redis]" ./sdk
+RUN pip install --no-cache-dir ".[web,redis]" "psycopg[binary]>=3.2" ./sdk
 
 RUN useradd --create-home --uid 10001 authhub && mkdir -p /var/lib/authhub && chown -R authhub:authhub /app /var/lib/authhub
 USER authhub
