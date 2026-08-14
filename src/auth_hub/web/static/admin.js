@@ -56,6 +56,19 @@ function setNotice(message, type = 'error') {
 
 function clearNotice() { $('#notice').innerHTML = ''; $('#notice').classList.add('hidden'); }
 
+async function loadRuntimeVersion() {
+  const targets = $$('[data-runtime-version]');
+  try {
+    const response = await fetch('/api/meta', { cache: 'no-store' });
+    if (!response.ok) throw new Error('metadata unavailable');
+    const release = await response.json();
+    const label = `v${release.version}${release.build ? ` · ${release.build}` : ''}`;
+    targets.forEach(target => { target.textContent = label; });
+  } catch (_) {
+    targets.forEach(target => { target.textContent = '版本未知'; });
+  }
+}
+
 async function api(path, options = {}) {
   const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -595,5 +608,6 @@ $('#logout-button').onclick = async () => { try { await api('/api/auth/logout', 
 $('#menu-button').onclick = () => { $('#sidebar').classList.add('open'); $('#sidebar-backdrop').classList.remove('hidden'); };
 $('#sidebar-backdrop').onclick = () => { $('#sidebar').classList.remove('open'); $('#sidebar-backdrop').classList.add('hidden'); };
 $$('.nav-item').forEach(item => { item.onclick = () => setPage(item.dataset.page); });
+loadRuntimeVersion();
 initialize();
 refreshIcons();

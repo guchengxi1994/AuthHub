@@ -19,6 +19,7 @@ except ImportError as error:  # pragma: no cover
 from .application import AuthHub, AuthHubSettings
 from .domain.errors import AuthHubError, AuthorizationError
 from .ports.services import Cache
+from .version import VERSION, runtime_release
 
 
 WEB_ROOT = Path(__file__).with_name("web")
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "authhub.db", cache: Optional[Cache] = None, settings: AuthHubSettings = AuthHubSettings()) -> Any:
     if FastAPI is None: raise RuntimeError("FastAPI is optional. Install auth-hub[web] to use create_app().") from _FASTAPI_ERROR
     hub = auth_hub or AuthHub.local(database_path, settings, cache=cache)
-    app = FastAPI(title="AuthHub", version="0.1.0")
+    app = FastAPI(title="AuthHub", version=VERSION)
     app.mount("/admin/assets", StaticFiles(directory=str(WEB_ROOT / "static")), name="admin-assets")
 
     @app.exception_handler(AuthHubError)
@@ -38,6 +39,9 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.get("/health")
     async def health() -> Dict[str, str]: return {"status": "ok"}
+
+    @app.get("/api/meta", include_in_schema=False)
+    async def runtime_metadata() -> Dict[str, str]: return runtime_release()
 
     @app.get("/", include_in_schema=False)
     async def root(): return RedirectResponse(url="/admin")

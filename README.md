@@ -83,6 +83,8 @@ docker compose up --build
 
 服务地址为 `http://localhost:8000`，可通过 `AUTH_HUB_PORT` 覆盖端口。Compose 会启动 AuthHub 和 Redis；AuthHub 使用 Redis 保存权限缓存，使用 SQLAlchemy 的 SQLite URL 和具名卷保存 AuthHub 自身的用户、RBAC、模块、资源实例、会话和审计数据。停止容器不会删除数据；需要清空本地环境时执行 `docker compose down -v`。
 
+管理端登录页和侧栏会显示运行中的 `v版本号 · 构建标识`。发布镜像时可设置 `AUTH_HUB_RELEASE` 与不可变的 `AUTH_HUB_BUILD`（例如 CI 构建号或 Git 提交短哈希）；两者由 `/api/meta` 无缓存返回，用于确认浏览器实际连接到的服务版本。
+
 管理端在 `http://localhost:8000/admin`，首次登录使用 `.env` 中的管理员用户名和密码。
 
 管理端前端位于 `src/auth_hub/web/`：`templates/admin.html` 是页面结构，`static/admin.css` 是管理端样式，`static/admin.js` 是 API 交互逻辑。FastAPI 仅将它们作为 `/admin` 和 `/admin/assets/*` 提供，Python 后端不内嵌前端代码。构建 wheel 时会一并包含这些资源。

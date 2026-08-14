@@ -11,6 +11,8 @@ body { margin: 0; min-width: 320px; }
 #app-view { height: 100vh; min-height: 0; overflow: hidden; }
 #app-main { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 #main-content { min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.app-release { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+[data-runtime-version] { overflow: hidden; color: #64748b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .initial-loading { display: flex; min-height: 240px; align-items: center; justify-content: center; gap: .65rem; color: #64748b; font-size: 14px; }
 .loading-spinner { width: 18px; height: 18px; border: 2px solid #d8e1ec; border-top-color: #2873d3; border-radius: 50%; animation: spin .75s linear infinite; }
 

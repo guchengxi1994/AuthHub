@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from datetime import timedelta
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -71,6 +72,16 @@ class ClientSdkTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "sdk-probe")
+
+    def test_runtime_metadata_reports_running_release(self):
+        from auth_hub.api import create_app
+
+        with patch.dict(os.environ, {"AUTH_HUB_RELEASE": "2.3.4", "AUTH_HUB_BUILD": "test-build"}):
+            with TestClient(create_app(auth_hub=AuthHub.in_memory())) as client:
+                response = client.get("/api/meta")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"version": "2.3.4", "build": "test-build"})
 
     def test_resource_instance_grant_management_api_and_resource_check(self):
         from auth_hub.api import create_app
