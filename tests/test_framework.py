@@ -156,6 +156,42 @@ class FrameworkTests(unittest.TestCase):
         self.assertTrue(hub.can_access_resource_instance(engineer_token, permission.code, instance.id).allowed)
         self.assertEqual(hub.can_access_resource_instance(seller_token, permission.code, instance.id).reason, "RESOURCE_ORGANIZATION_DENIED")
 
+    def test_resource_instance_grant_allows_a_collaborator_without_global_role(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("mcp", "MCP")
+        server = hub.create_resource(module.id, "mcp_server", "server", "MCP servers")
+        tool = hub.create_resource(module.id, "mcp_tool", "tool", "MCP tools")
+        manage_server = hub.create_permission(None, "Manage MCP server", module_id=module.id, resource_id=server.id, action="manage")
+        manage_tool = hub.create_permission(None, "Manage MCP tool", module_id=module.id, resource_id=tool.id, action="manage")
+        owner = hub.create_user("owner", "password")
+        collaborator = hub.create_user("collaborator", "password")
+        instance = hub.register_resource_instance(server.id, "server-100", owner_user_id=owner.id)
+        token = hub.login("collaborator", "password")["access_token"]
+
+        self.assertEqual(hub.can_access_resource_instance(token, manage_server.code, instance.id).reason, "PERMISSION_DENIED")
+        grants = hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [manage_server.code]}])
+        self.assertEqual(len(grants), 1)
+        result = hub.can_access_resource_instance(token, manage_server.code, instance.id)
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.matched_by, "resource_grant")
+        with self.assertRaises(ValidationError):
+            hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [manage_tool.code]}])
+
+    def test_resource_instance_grants_are_persisted_and_removed_with_instance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "authhub.sqlite3")
+            first = AuthHub.local(path)
+            module = first.register_module("datasets", "Datasets")
+            resource = first.create_resource(module.id, "entity", "dataset", "Datasets")
+            permission = first.create_permission(None, "Read dataset", module_id=module.id, resource_id=resource.id, action="read")
+            user = first.create_user("collaborator", "password")
+            instance = first.register_resource_instance(resource.id, "dataset-100")
+            first.replace_resource_instance_grants(instance.id, [{"user_id": user.id, "permission_codes": [permission.code]}])
+            second = AuthHub.local(path)
+            self.assertEqual(len(second.resource_instance_grants(instance.id)), 1)
+            second.delete_resource_instance(instance.id)
+            self.assertEqual(second.repository.list_resource_instance_grants(instance.id), [])
+
     def test_module_sync_cannot_remove_a_resource_referenced_by_a_permission(self):
         hub = AuthHub.in_memory()
         hub.register_module("orders", "Orders", resources=[{"resource_type": "entity", "resource_key": "order", "name": "Orders"}])

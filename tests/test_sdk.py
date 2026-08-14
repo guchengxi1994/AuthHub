@@ -72,6 +72,30 @@ class ClientSdkTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "sdk-probe")
 
+    def test_resource_instance_grant_management_api_and_resource_check(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory()
+        module = hub.register_module("mcp", "MCP")
+        resource = hub.create_resource(module.id, "mcp_server", "server", "MCP servers")
+        permission = hub.create_permission(None, "Manage server", module_id=module.id, resource_id=resource.id, action="manage")
+        collaborator = hub.create_user("collaborator", "password")
+        instance = hub.register_resource_instance(resource.id, "server-100")
+        app = create_app(auth_hub=hub)
+
+        with TestClient(app) as client:
+            admin_token = client.post("/api/auth/login", json={"username": "admin", "password": "change-me-now"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {admin_token}"}
+            response = client.put(f"/api/resource-instances/{instance.id}/grants", headers=headers, json={"grants": [{"user_id": collaborator.id, "permission_codes": [permission.code]}]})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(response.json()["items"]), 1)
+            index = client.get("/api/resource-instances", headers=headers).json()["items"]
+            self.assertEqual(index[0]["grant_count"], 1)
+            token = client.post("/api/auth/login", json={"username": "collaborator", "password": "password"}).json()["access_token"]
+            result = client.post("/api/auth/check-resource", headers={"Authorization": f"Bearer {token}"}, json={"permission": permission.code, "resource_id": resource.id, "external_id": "server-100"}).json()
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["matched_by"], "resource_grant")
+
     def test_sqlalchemy_outbox_decorator_is_transactional_and_dispatches_idempotently(self):
         from sqlalchemy import create_engine, select
         from sqlalchemy.orm import Session

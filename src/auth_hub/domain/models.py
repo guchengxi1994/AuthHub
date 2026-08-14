@@ -105,6 +105,16 @@ class ResourceInstance:
 
 
 @dataclass(frozen=True)
+class ResourceInstanceGrant:
+    """An explicit per-record allowance, layered on top of normal RBAC."""
+    id: str
+    resource_instance_id: str
+    user_id: str
+    permission_code: str
+    created_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass(frozen=True)
 class ModuleDefinition:
     id: str
     name: str

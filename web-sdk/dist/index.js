@@ -24,13 +24,18 @@ __export(index_exports, {
   PermissionButton: () => PermissionButton,
   PermissionProvider: () => PermissionProvider,
   PermissionRoute: () => PermissionRoute,
+  ResourcePermission: () => ResourcePermission,
+  ResourcePermissionProvider: () => ResourcePermissionProvider,
+  ResourcePermissionRoute: () => ResourcePermissionRoute,
   filterByPermission: () => filterByPermission,
-  usePermission: () => usePermission
+  usePermission: () => usePermission,
+  useResourcePermission: () => useResourcePermission
 });
 module.exports = __toCommonJS(index_exports);
 var import_react = require("react");
 var import_jsx_runtime = require("react/jsx-runtime");
 var PermissionContext = (0, import_react.createContext)(null);
+var ResourcePermissionContext = (0, import_react.createContext)(null);
 function normalizeSnapshot(snapshot) {
   if (Array.isArray(snapshot)) {
     return snapshot;
@@ -89,6 +94,78 @@ function usePermission() {
   if (!context) throw new Error("usePermission must be used inside PermissionProvider");
   return context;
 }
+function resourceResult(value) {
+  return typeof value === "boolean" ? { allowed: value } : value;
+}
+function resourceRequestKey(request) {
+  return JSON.stringify({
+    permission: request.permission,
+    resourceId: request.resourceId,
+    externalId: request.externalId,
+    context: request.context ?? null
+  });
+}
+function ResourcePermissionProvider({ children, checkResource, cacheKey }) {
+  const cached = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+  const identity = (0, import_react.useRef)({ cacheKey, checkResource });
+  const version = (0, import_react.useRef)(0);
+  if (!Object.is(identity.current.cacheKey, cacheKey) || identity.current.checkResource !== checkResource) {
+    identity.current = { cacheKey, checkResource };
+    cached.current.clear();
+    version.current += 1;
+  }
+  const cacheVersion = version.current;
+  const value = (0, import_react.useMemo)(() => ({
+    version: cacheVersion,
+    resolve: (request, refresh = false) => {
+      const key = resourceRequestKey(request);
+      if (refresh || !cached.current.has(key)) {
+        const pending = checkResource(request).then(resourceResult);
+        cached.current.set(key, pending);
+      }
+      return cached.current.get(key);
+    }
+  }), [checkResource, cacheKey, cacheVersion]);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResourcePermissionContext.Provider, { value, children });
+}
+function useResourcePermission(request, checker) {
+  const cache = (0, import_react.useContext)(ResourcePermissionContext);
+  if (!checker && !cache) throw new Error("useResourcePermission requires ResourcePermissionProvider or a checker");
+  const contextKey = JSON.stringify(request.context ?? null);
+  const stableRequest = (0, import_react.useMemo)(() => ({ ...request, context: request.context ? { ...request.context } : void 0 }), [request.permission, request.resourceId, request.externalId, contextKey]);
+  const key = resourceRequestKey(stableRequest);
+  const decisionKey = `${cache ? cache.version : "direct"}:${key}`;
+  const [result, setResult] = (0, import_react.useState)(null);
+  const [loading, setLoading] = (0, import_react.useState)(true);
+  const [error, setError] = (0, import_react.useState)(null);
+  const [resolvedDecisionKey, setResolvedDecisionKey] = (0, import_react.useState)("");
+  const execute = (0, import_react.useCallback)(async (refresh = false) => {
+    setResolvedDecisionKey(decisionKey);
+    setLoading(true);
+    setError(null);
+    try {
+      const next = checker ? resourceResult(await checker(stableRequest)) : await cache.resolve(stableRequest, refresh);
+      setResult(next);
+    } catch (reason) {
+      setResult(null);
+      setError(reason instanceof Error ? reason : new Error("Unable to check AuthHub resource permission"));
+    } finally {
+      setLoading(false);
+    }
+  }, [cache, checker, decisionKey, stableRequest]);
+  (0, import_react.useEffect)(() => {
+    void execute();
+  }, [execute]);
+  const current = resolvedDecisionKey === decisionKey;
+  return (0, import_react.useMemo)(() => ({
+    ready: current && !loading && !error,
+    loading: !current || loading,
+    error,
+    allowed: current && Boolean(result?.allowed),
+    result: current ? result : null,
+    refresh: () => execute(true)
+  }), [current, loading, error, result, execute]);
+}
 function isAllowed(state, required, match) {
   const permissions = typeof required === "string" ? [required] : required;
   return match === "all" ? state.hasAllPermissions(permissions) : state.hasAnyPermission(permissions);
@@ -112,6 +189,15 @@ function PermissionButton({ permission, match = "all", children, fallback = null
     onClick: void 0
   });
 }
+function ResourcePermission({ request, checker, children, fallback = null, loadingFallback = null, errorFallback }) {
+  const state = useResourcePermission(request, checker);
+  if (state.loading) return loadingFallback;
+  if (state.error) return errorFallback ? errorFallback(state.error, state.refresh) : fallback;
+  return state.allowed ? children : fallback;
+}
+function ResourcePermissionRoute({ request, checker, children, fallback, forbidden, loadingFallback, errorFallback }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResourcePermission, { request, checker, fallback: forbidden ?? fallback, loadingFallback, errorFallback, children });
+}
 function filterByPermission(items, permissionOf, state) {
   return items.filter((item) => {
     const required = permissionOf(item);
@@ -125,6 +211,10 @@ function filterByPermission(items, permissionOf, state) {
   PermissionButton,
   PermissionProvider,
   PermissionRoute,
+  ResourcePermission,
+  ResourcePermissionProvider,
+  ResourcePermissionRoute,
   filterByPermission,
-  usePermission
+  usePermission,
+  useResourcePermission
 });

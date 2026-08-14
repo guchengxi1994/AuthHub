@@ -223,7 +223,19 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.get("/api/resource-instances")
     async def list_resource_instances(resource_id: Optional[str] = None, owner_user_id: Optional[str] = None, organization_id: Optional[str] = None, authorization: Optional[str] = Header(None)):
         _require_admin(hub, authorization)
-        return {"items": [hub.resource_instance_dict(item) for item in hub.repository.list_resource_instances(resource_id, owner_user_id=owner_user_id, organization_id=organization_id)]}
+        return {"items": [{**hub.resource_instance_dict(item), "grant_count": len(hub.resource_instance_grants(item.id))} for item in hub.repository.list_resource_instances(resource_id, owner_user_id=owner_user_id, organization_id=organization_id)]}
+
+    @app.get("/api/resource-instances/{instance_id}/grants")
+    async def list_resource_instance_grants(instance_id: str, authorization: Optional[str] = Header(None)):
+        _require_admin(hub, authorization)
+        return {"items": [hub.resource_instance_grant_dict(item) for item in hub.resource_instance_grants(instance_id)]}
+
+    @app.put("/api/resource-instances/{instance_id}/grants")
+    async def replace_resource_instance_grants(instance_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
+        actor = _require_admin(hub, authorization)
+        grants = payload.get("grants")
+        if not isinstance(grants, list): raise ValidationError("grants must be a list")
+        return {"items": [hub.resource_instance_grant_dict(item) for item in hub.replace_resource_instance_grants(instance_id, grants, actor_id=actor.id)]}
 
     @app.post("/api/resource-instances")
     async def register_resource_instance(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):

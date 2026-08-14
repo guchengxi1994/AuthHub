@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type ReactElement,
@@ -19,6 +20,22 @@ export interface AuthHubPermissionSnapshot {
 }
 
 export type PermissionSnapshotLoader = () => Promise<AuthHubPermissionSnapshot | readonly string[]>;
+
+export interface ResourcePermissionRequest {
+  permission: string;
+  resourceId: string;
+  externalId: string;
+  context?: Readonly<Record<string, unknown>>;
+}
+
+export interface ResourcePermissionResult {
+  allowed: boolean;
+  authenticated?: boolean;
+  reason?: string;
+}
+
+/** Calls a business-backend resource authorization endpoint, never AuthHub directly. */
+export type ResourcePermissionChecker = (request: ResourcePermissionRequest) => Promise<ResourcePermissionResult | boolean>;
 
 export interface PermissionProviderProps {
   children: ReactNode;
@@ -41,6 +58,11 @@ export interface PermissionState {
 }
 
 const PermissionContext = createContext<PermissionState | null>(null);
+interface ResourcePermissionCache {
+  version: number;
+  resolve: (request: ResourcePermissionRequest, refresh?: boolean) => Promise<ResourcePermissionResult>;
+}
+const ResourcePermissionContext = createContext<ResourcePermissionCache | null>(null);
 
 function normalizeSnapshot(
   snapshot: AuthHubPermissionSnapshot | readonly string[]
@@ -110,6 +132,102 @@ export function usePermission(): PermissionState {
   return context;
 }
 
+function resourceResult(value: ResourcePermissionResult | boolean): ResourcePermissionResult {
+  return typeof value === "boolean" ? { allowed: value } : value;
+}
+
+function resourceRequestKey(request: ResourcePermissionRequest): string {
+  return JSON.stringify({
+    permission: request.permission,
+    resourceId: request.resourceId,
+    externalId: request.externalId,
+    context: request.context ?? null,
+  });
+}
+
+export interface ResourcePermissionProviderProps {
+  children: ReactNode;
+  checkResource: ResourcePermissionChecker;
+  /** Change when the authenticated session changes to discard prior decisions. */
+  cacheKey?: unknown;
+}
+
+/**
+ * Shares in-flight and completed record-level decisions for one browser
+ * session. The checker belongs to the business application and should proxy
+ * its protected resource endpoint.
+ */
+export function ResourcePermissionProvider({ children, checkResource, cacheKey }: ResourcePermissionProviderProps): ReactNode {
+  const cached = useRef(new Map<string, Promise<ResourcePermissionResult>>());
+  const identity = useRef({ cacheKey, checkResource });
+  const version = useRef(0);
+  if (!Object.is(identity.current.cacheKey, cacheKey) || identity.current.checkResource !== checkResource) {
+    identity.current = { cacheKey, checkResource };
+    cached.current.clear();
+    version.current += 1;
+  }
+  const cacheVersion = version.current;
+  const value = useMemo<ResourcePermissionCache>(() => ({
+    version: cacheVersion,
+    resolve: (request, refresh = false) => {
+      const key = resourceRequestKey(request);
+      if (refresh || !cached.current.has(key)) {
+        const pending = checkResource(request).then(resourceResult);
+        cached.current.set(key, pending);
+      }
+      return cached.current.get(key)!;
+    },
+  }), [checkResource, cacheKey, cacheVersion]);
+  return <ResourcePermissionContext.Provider value={value}>{children}</ResourcePermissionContext.Provider>;
+}
+
+export interface ResourcePermissionState {
+  ready: boolean;
+  loading: boolean;
+  error: Error | null;
+  allowed: boolean;
+  result: ResourcePermissionResult | null;
+  refresh: () => Promise<void>;
+}
+
+/** Resolve a record-level decision for an API, entity, MCP Server, or MCP Tool. */
+export function useResourcePermission(request: ResourcePermissionRequest, checker?: ResourcePermissionChecker): ResourcePermissionState {
+  const cache = useContext(ResourcePermissionContext);
+  if (!checker && !cache) throw new Error("useResourcePermission requires ResourcePermissionProvider or a checker");
+  const contextKey = JSON.stringify(request.context ?? null);
+  const stableRequest = useMemo<ResourcePermissionRequest>(() => ({ ...request, context: request.context ? { ...request.context } : undefined }), [request.permission, request.resourceId, request.externalId, contextKey]);
+  const key = resourceRequestKey(stableRequest);
+  const decisionKey = `${cache ? cache.version : "direct"}:${key}`;
+  const [result, setResult] = useState<ResourcePermissionResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [resolvedDecisionKey, setResolvedDecisionKey] = useState("");
+  const execute = useCallback(async (refresh = false) => {
+    setResolvedDecisionKey(decisionKey);
+    setLoading(true);
+    setError(null);
+    try {
+      const next = checker ? resourceResult(await checker(stableRequest)) : await cache!.resolve(stableRequest, refresh);
+      setResult(next);
+    } catch (reason) {
+      setResult(null);
+      setError(reason instanceof Error ? reason : new Error("Unable to check AuthHub resource permission"));
+    } finally {
+      setLoading(false);
+    }
+  }, [cache, checker, decisionKey, stableRequest]);
+  useEffect(() => { void execute(); }, [execute]);
+  const current = resolvedDecisionKey === decisionKey;
+  return useMemo(() => ({
+    ready: current && !loading && !error,
+    loading: !current || loading,
+    error,
+    allowed: current && Boolean(result?.allowed),
+    result: current ? result : null,
+    refresh: () => execute(true),
+  }), [current, loading, error, result, execute]);
+}
+
 function isAllowed(state: PermissionState, required: PermissionInput, match: PermissionMatch): boolean {
   const permissions = typeof required === "string" ? [required] : required;
   return match === "all" ? state.hasAllPermissions(permissions) : state.hasAnyPermission(permissions);
@@ -154,6 +272,32 @@ export function PermissionButton({ permission, match = "all", children, fallback
     "aria-disabled": true,
     onClick: undefined,
   });
+}
+
+export interface ResourcePermissionProps {
+  request: ResourcePermissionRequest;
+  children: ReactNode;
+  checker?: ResourcePermissionChecker;
+  fallback?: ReactNode;
+  loadingFallback?: ReactNode;
+  errorFallback?: (error: Error, refresh: () => Promise<void>) => ReactNode;
+}
+
+/** Render only after a resource-instance decision has been obtained. */
+export function ResourcePermission({ request, checker, children, fallback = null, loadingFallback = null, errorFallback }: ResourcePermissionProps): ReactNode {
+  const state = useResourcePermission(request, checker);
+  if (state.loading) return loadingFallback;
+  if (state.error) return errorFallback ? errorFallback(state.error, state.refresh) : fallback;
+  return state.allowed ? children : fallback;
+}
+
+export interface ResourcePermissionRouteProps extends ResourcePermissionProps {
+  forbidden?: ReactNode;
+}
+
+/** Router-agnostic guard for a route whose target is one concrete resource instance. */
+export function ResourcePermissionRoute({ request, checker, children, fallback, forbidden, loadingFallback, errorFallback }: ResourcePermissionRouteProps): ReactNode {
+  return <ResourcePermission request={request} checker={checker} fallback={forbidden ?? fallback} loadingFallback={loadingFallback} errorFallback={errorFallback}>{children}</ResourcePermission>;
 }
 
 export function filterByPermission<T>(items: readonly T[], permissionOf: (item: T) => PermissionInput | undefined, state: Pick<PermissionState, "hasAllPermissions">): T[] {

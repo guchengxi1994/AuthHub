@@ -5,6 +5,8 @@ import {
   Permission,
   PermissionButton,
   PermissionProvider,
+  ResourcePermission,
+  ResourcePermissionProvider,
   filterByPermission,
   usePermission,
 } from "../src/index";
@@ -65,6 +67,22 @@ describe("AuthHub React permission rendering", () => {
     expect(html).toContain("Orders");
     expect(html).toContain("Settings");
     expect(html).not.toContain("Admin");
+  });
+
+  it("keeps resource-level content hidden until its asynchronous decision resolves", () => {
+    const html = renderToStaticMarkup(
+      <ResourcePermissionProvider checkResource={async () => ({ allowed: true })}>
+        <ResourcePermission
+          request={{ permission: "mcp:mcp_server:server:manage", resourceId: "mcp:mcp_server:server", externalId: "server-100" }}
+          loadingFallback={<span>checking</span>}
+        >
+          <button type="button">manage</button>
+        </ResourcePermission>
+      </ResourcePermissionProvider>,
+    );
+
+    expect(html).toContain("checking");
+    expect(html).not.toContain("manage");
   });
 });
 

@@ -107,6 +107,57 @@ function selectionList(items, inputName, selected = new Set(), value = item => i
   return `<div class="selection-list">${items.map(item => `<label><input type="checkbox" name="${esc(inputName)}" value="${esc(value(item))}" ${selected.has(value(item)) ? 'checked' : ''}><span>${esc(text(item))}</span></label>`).join('')}</div>`;
 }
 
+function permissionGroups(permissions, modules, resources) {
+  const moduleNames = Object.fromEntries(modules.map(item => [item.id, item.name]));
+  const resourceById = Object.fromEntries(resources.map(item => [item.id, item]));
+  const grouped = new Map();
+  permissions.forEach(permission => {
+    const resource = resourceById[permission.resource_id];
+    const moduleName = moduleNames[permission.module_id] || '系统权限';
+    const resourceName = resource?.name || permission.resource_key || '通用操作';
+    const resourceType = resource?.resource_type || permission.resource_type;
+    const key = `${permission.module_id || 'system'}:${permission.resource_id || permission.code}`;
+    if (!grouped.has(key)) grouped.set(key, { key, moduleName, resourceName, resourceType, permissions: [] });
+    grouped.get(key).permissions.push(permission);
+  });
+  return [...grouped.values()]
+    .sort((left, right) => `${left.moduleName}/${left.resourceName}`.localeCompare(`${right.moduleName}/${right.resourceName}`, 'zh-CN'))
+    .map(group => ({ ...group, permissions: group.permissions.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')) }));
+}
+
+function selectionToolbar(inputName) {
+  return `<div class="selection-toolbar"><span>已选 <strong data-selected-count="${esc(inputName)}">0</strong></span><div><button type="button" class="btn-link" data-selection="all" data-selection-name="${esc(inputName)}">全选</button><button type="button" class="btn-link" data-selection="none" data-selection-name="${esc(inputName)}">清空</button><button type="button" class="btn-link" data-selection="invert" data-selection-name="${esc(inputName)}">反选</button></div></div>`;
+}
+
+function permissionOptions(groups, inputName, selectedCodes = new Set()) {
+  if (!groups.length) return '<p class="selection-list-empty">当前资源还没有可分配的启用权限。</p>';
+  const scopeLabels = { global: '全部', owner: '本人归属', organization: '组织归属' };
+  return groups.map(group => `<section class="permission-group"><div class="permission-group-heading"><div><span>${esc(group.moduleName)}</span><strong>${esc(group.resourceName)}</strong></div><small>${esc(resourceLabel(group.resourceType))}</small></div>${group.permissions.map(permission => `<label class="permission-option"><input type="checkbox" name="${esc(inputName)}" value="${esc(permission.code)}" ${selectedCodes.has(permission.code) ? 'checked' : ''} ${permission.enabled ? '' : 'disabled'}><span><strong>${esc(permission.name)}</strong><small>${esc(actionLabel(permission.action))} · ${esc(scopeLabels[permission.scope || 'global'] || permission.scope || '全部')} · ${esc(permission.code)}</small></span>${permission.enabled ? '' : badge('停用', 'muted')}</label>`).join('')}</section>`).join('');
+}
+
+function updateSelectedCount(root, inputName) {
+  const count = $$(`input[name="${inputName}"]:checked`, root).length;
+  $$(`[data-selected-count="${inputName}"]`, root).forEach(item => { item.textContent = count; });
+}
+
+function bindSelectionToolbar(root, inputName, onChange = () => {}) {
+  const inputs = () => $$(`input[name="${inputName}"]`, root).filter(item => !item.disabled);
+  $$(`[data-selection-name="${inputName}"]`, root).forEach(control => {
+    control.onclick = () => {
+      const action = control.dataset.selection;
+      inputs().forEach(input => { input.checked = action === 'all' ? true : action === 'none' ? false : !input.checked; });
+      updateSelectedCount(root, inputName); onChange();
+    };
+  });
+  inputs().forEach(input => { input.onchange = () => { updateSelectedCount(root, inputName); onChange(); }; });
+  updateSelectedCount(root, inputName);
+}
+
+function filterPermissionOptions(root, query) {
+  $$('.permission-option', root).forEach(option => option.classList.toggle('hidden', !option.textContent.toLowerCase().includes(query)));
+  $$('.permission-group', root).forEach(group => group.classList.toggle('hidden', !$('.permission-option:not(.hidden)', group)));
+}
+
 async function renderOverview() {
   const [overview, audit] = await Promise.all([api('/api/admin/overview'), api('/api/audit-events?limit=8')]);
   const metrics = [['用户', overview.users, 'users', 'blue'], ['组织', overview.organizations, 'network', 'warning'], ['角色', overview.roles, 'key-round', 'active'], ['权限', overview.permissions, 'key-square', 'blue'], ['模块', overview.modules, 'boxes', 'warning'], ['资源', overview.resources, 'database-zap', 'active'], ['实例索引', overview.resource_instances, 'list-tree', 'blue']];
@@ -255,15 +306,13 @@ function showNewRole() {
 async function showRolePermissions(roleId) {
   const [permissions, assigned, modules, resources] = await Promise.all([api('/api/permissions'), api(`/api/roles/${roleId}/permissions`), api('/api/modules'), api('/api/resources')]);
   const assignedCodes = new Set(assigned.items.map(item => item.code));
-  const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
-  const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
-  const rows = permissions.items.map(permission => `<label class="permission-option"><input type="checkbox" name="permission_codes" value="${esc(permission.code)}" ${assignedCodes.has(permission.code) ? 'checked' : ''} ${permission.enabled ? '' : 'disabled'}><span><strong>${esc(permission.name)}</strong><small>${esc(moduleNames[permission.module_id] || '系统')} · ${esc(resourceNames[permission.resource_id] || permission.resource_key || '-')} · ${esc(actionLabel(permission.action))}</small></span>${permission.enabled ? '' : badge('停用', 'muted')}</label>`).join('');
-  const el = openModal('配置角色权限', `<form id="role-permissions-form" class="space-y-4"><div class="relative">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-filter" class="field pl-9" placeholder="筛选权限、模块或资源"></div><div id="permission-options" class="selection-list selection-list-tall">${rows || '<p class="selection-list-empty">暂无权限，请先配置资源和权限。</p>'}</div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存权限</button></div></form>`, true);
+  const groups = permissionGroups(permissions.items, modules.items, resources.items);
+  const el = openModal('配置角色权限', `<form id="role-permissions-form" class="space-y-4"><div class="relative">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-filter" class="field pl-9" placeholder="筛选模块、资源或权限"></div>${selectionToolbar('permission_codes')}<div id="permission-options" class="selection-list selection-list-tall">${permissionOptions(groups, 'permission_codes', assignedCodes)}</div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存权限</button></div></form>`, true);
   $('#form-cancel', el).onclick = () => el.close();
   $('#permission-filter', el).oninput = event => {
-    const value = event.target.value.toLowerCase();
-    $$('.permission-option', el).forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
+    filterPermissionOptions(el, event.target.value.toLowerCase());
   };
+  bindSelectionToolbar(el, 'permission_codes');
   $('#role-permissions-form', el).onsubmit = async event => {
     event.preventDefault();
     const selected = new Set(new FormData(event.currentTarget).getAll('permission_codes'));
@@ -278,16 +327,21 @@ async function showRolePermissions(roleId) {
 
 async function renderPermissions() {
   const [permissions, modules, resources] = await Promise.all([api('/api/permissions'), api('/api/modules'), api('/api/resources')]);
-  const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
-  const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
   const scopeLabels = { global: '全部', owner: '本人归属', organization: '组织归属' };
-  const rows = permissions.items.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 text-xs text-slate-500">${esc(permission.description || '-')}</div></td><td class="text-slate-500">${esc(moduleNames[permission.module_id] || '-')}</td><td><div class="font-medium text-slate-700">${esc(resourceNames[permission.resource_id] || permission.resource_key || '-')}</div><div class="mt-0.5 text-xs text-slate-500">${esc(resourceLabel(permission.resource_type))}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${badge(scopeLabels[permission.scope || 'global'] || permission.scope || '全部', permission.scope === 'global' ? 'muted' : 'active')}</td><td>${status(permission.enabled)}</td></tr>`).join('');
+  const groups = permissionGroups(permissions.items, modules.items, resources.items);
+  const rows = groups.map(group => `<tr class="permission-table-group"><td colspan="4"><span>${esc(group.moduleName)}</span><strong>${esc(group.resourceName)}</strong><small>${esc(resourceLabel(group.resourceType))}</small></td></tr>${group.permissions.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(permission.code)}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${badge(scopeLabels[permission.scope || 'global'] || permission.scope || '全部', permission.scope === 'global' ? 'muted' : 'active')}</td><td>${status(permission.enabled)}</td></tr>`).join('')}`).join('');
   $('#content').innerHTML = pageHeader('权限', button('新增权限', 'new-permission', 'plus', 'primary'))
-    + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选权限、模块或资源"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissions.items.length} 项权限</span></div>`
-    + table(['权限', '业务模块', '资源', '操作', '数据范围', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
+    + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选模块、资源或权限"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissions.items.length} 项权限</span></div>`
+    + table(['权限', '操作', '数据范围', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
   $('#permission-list-filter').oninput = event => {
     const value = event.target.value.toLowerCase();
     $$('[data-permission-row]').forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
+    $$('.permission-table-group').forEach(row => {
+      let next = row.nextElementSibling;
+      let hasVisible = false;
+      while (next && !next.classList.contains('permission-table-group')) { if (!next.classList.contains('hidden')) hasVisible = true; next = next.nextElementSibling; }
+      row.classList.toggle('hidden', !hasVisible);
+    });
   };
   refreshIcons();
 }
@@ -295,7 +349,7 @@ async function renderPermissions() {
 async function showPermission() {
   const [modules, resources, roles] = await Promise.all([api('/api/modules'), api('/api/resources'), api('/api/roles')]);
   const moduleOptions = modules.items.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
-  const el = openModal('新增权限', `<form id="permission-form" class="space-y-5"><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">权限名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如查看订单"></div><div><label class="label">业务模块 <span class="text-rose-600">*</span></label><select class="field" name="module_id" id="permission-module" required><option value="">请选择业务模块</option>${moduleOptions}</select></div></div><div><label class="label">资源 <span class="text-rose-600">*</span></label><select class="field" name="resource_id" id="permission-resource" required disabled><option value="">请先选择业务模块</option></select></div><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">允许的操作 <span class="text-rose-600">*</span></label><select class="field" name="action" id="permission-action" required disabled><option value="">请先选择资源</option></select></div><div><label class="label">数据范围 <span class="text-rose-600">*</span></label><select class="field" name="scope" required><option value="global">全部资源</option><option value="owner">仅本人创建/拥有</option><option value="organization">所属组织</option></select><p class="field-help">实例归属由业务服务注册；超级管理员始终可操作。</p></div></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="说明这项操作允许做什么"></textarea></div><div><span class="label">授予角色 <span class="text-rose-600">*</span></span>${selectionList(roles.items.filter(role => role.enabled), 'role_ids')}<p class="field-help">权限创建后立即授予所选角色；后续也可在角色页调整。</p></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建权限</button></div></form>`);
+  const el = openModal('新增权限', `<form id="permission-form" class="space-y-5"><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">权限名称 <span class="text-rose-600">*</span></label><input class="field" name="name" required placeholder="例如查看订单"></div><div><label class="label">业务模块 <span class="text-rose-600">*</span></label><select class="field" name="module_id" id="permission-module" required><option value="">请选择业务模块</option>${moduleOptions}</select></div></div><div><label class="label">资源 <span class="text-rose-600">*</span></label><select class="field" name="resource_id" id="permission-resource" required disabled><option value="">请先选择业务模块</option></select></div><div class="grid gap-4 sm:grid-cols-2"><div><label class="label">允许的操作 <span class="text-rose-600">*</span></label><select class="field" name="action" id="permission-action" required disabled><option value="">请先选择资源</option></select></div><div><label class="label">数据范围 <span class="text-rose-600">*</span></label><select class="field" name="scope" required><option value="global">全部资源</option><option value="owner">仅本人创建/拥有</option><option value="organization">所属组织</option></select><p class="field-help">实例归属由业务服务注册；超级管理员始终可操作。</p></div></div><div><label class="label">描述</label><textarea class="field" name="description" placeholder="说明这项操作允许做什么"></textarea></div><div><span class="label">同时授予角色</span>${selectionList(roles.items.filter(role => role.enabled), 'role_ids')}<p class="field-help">可留空，之后在角色页统一配置。</p></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('plus')}创建权限</button></div></form>`);
   const updateResources = () => {
     const moduleId = $('#permission-module', el).value;
     const select = $('#permission-resource', el);
@@ -321,7 +375,6 @@ async function showPermission() {
     const form = new FormData(event.currentTarget);
     const buttonEl = $('button[type="submit"]', event.currentTarget);
     try {
-      if (!form.getAll('role_ids').length) throw new Error('请至少选择一个角色');
       setLoading(buttonEl, true, '创建权限');
       await api('/api/permissions', { method: 'POST', body: JSON.stringify({ name: form.get('name'), module_id: form.get('module_id'), resource_id: form.get('resource_id'), action: form.get('action'), scope: form.get('scope'), description: form.get('description') || undefined, role_ids: form.getAll('role_ids') }) });
       el.close(); setToast('权限已创建并绑定资源'); renderPermissions();
@@ -366,9 +419,59 @@ async function renderResourceInstances() {
   const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
   const userNames = Object.fromEntries(users.items.map(item => [item.id, item.display_name || item.username]));
   const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
-  const rows = instances.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(item.updated_at).toLocaleString())}</td></tr>`).join('');
-  $('#content').innerHTML = pageHeader('资源实例') + table(['资源', '业务记录 ID', '归属用户', '归属组织', '最近同步'], rows, '暂无业务服务登记的资源实例。实例归属由业务服务通过 SDK 自动同步，管理台只读展示。');
-  refreshIcons();
+  const rows = instances.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td>${item.grant_count ? badge(`${item.grant_count} 位协作者`, 'active') : '<span class="text-xs text-slate-400">未授权</span>'}</td><td><div class="flex justify-end">${button('协作授权', `instance-grants:${item.id}`, 'users-round', 'secondary')}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('资源实例') + table(['资源', '业务记录 ID', '归属用户', '归属组织', '协作者', '操作'], rows, '暂无业务服务登记的资源实例。');
+  bindActions(); refreshIcons();
+}
+
+async function showInstanceGrants(instanceId) {
+  const [instances, grants, users, permissions, modules, resources, organizations] = await Promise.all([
+    api('/api/resource-instances'), api(`/api/resource-instances/${encodeURIComponent(instanceId)}/grants`), api('/api/users'), api('/api/permissions'), api('/api/modules'), api('/api/resources'), api('/api/organizations')
+  ]);
+  const instance = instances.items.find(item => item.id === instanceId);
+  if (!instance) throw new Error('资源实例不存在或已删除');
+  const resource = resources.items.find(item => item.id === instance.resource_id);
+  const userNames = Object.fromEntries(users.items.map(item => [item.id, item.display_name || item.username]));
+  const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
+  const availablePermissions = permissions.items.filter(item => item.enabled && item.resource_id === instance.resource_id);
+  const groups = permissionGroups(availablePermissions, modules.items, resources.items);
+  const collaborators = users.items.filter(item => item.enabled && !item.is_super_admin);
+  const grantsByUser = new Map();
+  grants.items.forEach(grant => {
+    if (!grantsByUser.has(grant.user_id)) grantsByUser.set(grant.user_id, new Set());
+    grantsByUser.get(grant.user_id).add(grant.permission_code);
+  });
+  let currentUserId = [...grantsByUser.keys()][0] || collaborators[0]?.id || '';
+  const el = openModal('配置实例协作权限', `<form id="instance-grants-form" class="space-y-4"><div class="detail-strip"><div><span>资源</span><strong>${esc(resource?.name || instance.resource_id)}</strong></div><div><span>业务记录</span><strong class="font-mono">${esc(instance.external_id)}</strong></div><div><span>归属用户</span><strong>${esc(userNames[instance.owner_user_id] || '-')}</strong></div><div><span>归属组织</span><strong>${esc(organizationNames[instance.organization_id] || '-')}</strong></div></div><div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"><div><label class="label">协作者</label><select id="instance-grant-user" class="field" ${collaborators.length ? '' : 'disabled'}>${collaborators.map(user => `<option value="${esc(user.id)}" ${currentUserId === user.id ? 'selected' : ''}>${esc(user.display_name || user.username)}（${esc(user.username)}）</option>`).join('')}</select></div><div class="self-end"><button type="button" id="instance-grant-clear" class="btn-secondary" ${currentUserId ? '' : 'disabled'}>${icon('user-minus')}移除授权</button></div></div><div class="flex items-center justify-between gap-3"><span class="label !mb-0">可操作权限</span>${selectionToolbar('grant_permission_codes')}</div><div id="instance-grant-options" class="selection-list selection-list-tall"></div><div id="instance-grant-summary" class="collaborator-summary"></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit" ${availablePermissions.length && collaborators.length ? '' : 'disabled'}>${icon('save')}保存协作权限</button></div></form>`, true);
+  const renderSummary = () => {
+    const items = [...grantsByUser.entries()].filter(([, codes]) => codes.size).map(([userId, codes]) => `<div><span>${icon('user-round', 'h-4 w-4')}${esc(userNames[userId] || userId)}</span><small>${esc([...codes].map(code => permissions.items.find(item => item.code === code)?.name || code).join('、'))}</small></div>`);
+    $('#instance-grant-summary', el).innerHTML = items.length ? `<span class="label">已授权协作者</span>${items.join('')}` : '';
+    refreshIcons();
+  };
+  const persistCurrentSelection = () => {
+    if (!currentUserId) return;
+    grantsByUser.set(currentUserId, new Set($$('input[name="grant_permission_codes"]:checked', el).map(input => input.value)));
+    renderSummary();
+  };
+  const renderOptions = () => {
+    const selected = grantsByUser.get(currentUserId) || new Set();
+    $('#instance-grant-options', el).innerHTML = permissionOptions(groups, 'grant_permission_codes', selected);
+    bindSelectionToolbar(el, 'grant_permission_codes', persistCurrentSelection);
+  };
+  renderOptions(); renderSummary();
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#instance-grant-user', el).onchange = event => { persistCurrentSelection(); currentUserId = event.target.value; renderOptions(); };
+  $('#instance-grant-clear', el).onclick = () => { if (currentUserId) { grantsByUser.delete(currentUserId); renderOptions(); renderSummary(); } };
+  $('#instance-grants-form', el).onsubmit = async event => {
+    event.preventDefault(); persistCurrentSelection();
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    const payload = [...grantsByUser.entries()].filter(([, codes]) => codes.size).map(([userId, codes]) => ({ user_id: userId, permission_codes: [...codes] }));
+    try {
+      setLoading(buttonEl, true, '保存协作权限');
+      await api(`/api/resource-instances/${encodeURIComponent(instanceId)}/grants`, { method: 'PUT', body: JSON.stringify({ grants: payload }) });
+      el.close(); setToast('实例协作权限已保存'); renderResourceInstances();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '保存协作权限'); }
+  };
 }
 
 async function showNewResource() {
@@ -427,6 +530,7 @@ async function performAction(action) {
   if (kind === 'user-roles') return showUserRoles(parts[0]);
   if (kind === 'user-organizations') return showUserOrganizations(parts[0]);
   if (kind === 'role-permissions') return showRolePermissions(parts[0]);
+  if (kind === 'instance-grants') return showInstanceGrants(parts[0]);
   if (kind === 'org-edit') return showOrganization(parts[0]);
   if (kind === 'user-toggle') {
     try { await api(`/api/users/${parts[0]}`, { method: 'PATCH', body: JSON.stringify({ enabled: parts[1] === 'true' }) }); setToast(parts[1] === 'true' ? '用户已启用' : '用户已停用'); renderUsers(); } catch (error) { setNotice(error.message); }

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Set
 
 from .domain.errors import ConflictError
-from .domain.models import AuditEvent, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, Role, User
+from .domain.models import AuditEvent, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, ResourceInstanceGrant, Role, User
 
 
 def _require_sqlalchemy() -> Dict[str, Any]:
@@ -55,6 +55,7 @@ class SQLAlchemyAuthHubRepository:
         self.role_permissions = sa["Table"]("role_permissions", self.metadata, c("role_id", S(64), sa["ForeignKey"]("roles.id", ondelete="CASCADE"), primary_key=True), c("permission_code", S(512), sa["ForeignKey"]("permissions.code", ondelete="CASCADE"), primary_key=True))
         self.user_organizations = sa["Table"]("user_organizations", self.metadata, c("user_id", S(64), sa["ForeignKey"]("users.id", ondelete="CASCADE"), primary_key=True), c("organization_id", S(64), sa["ForeignKey"]("organizations.id", ondelete="CASCADE"), primary_key=True))
         self.resource_instances = sa["Table"]("resource_instances", self.metadata, c("id", S(64), primary_key=True), c("resource_id", S(255), sa["ForeignKey"]("resources.id", ondelete="CASCADE"), nullable=False), c("external_id", S(512), nullable=False), c("owner_user_id", S(64), sa["ForeignKey"]("users.id")), c("organization_id", S(64), sa["ForeignKey"]("organizations.id")), c("metadata", J, nullable=False), c("created_at", D(timezone=True), nullable=False), c("updated_at", D(timezone=True), nullable=False), sa["UniqueConstraint"]("resource_id", "external_id", name="uq_resource_instance_external"))
+        self.resource_instance_grants = sa["Table"]("resource_instance_grants", self.metadata, c("id", S(64), primary_key=True), c("resource_instance_id", S(64), sa["ForeignKey"]("resource_instances.id", ondelete="CASCADE"), nullable=False), c("user_id", S(64), sa["ForeignKey"]("users.id", ondelete="CASCADE"), nullable=False), c("permission_code", S(512), sa["ForeignKey"]("permissions.code", ondelete="CASCADE"), nullable=False), c("created_at", D(timezone=True), nullable=False), sa["UniqueConstraint"]("resource_instance_id", "user_id", "permission_code", name="uq_resource_instance_grant"))
         self.metadata.create_all(self.engine)
 
     def _one(self, table: Any, **where: Any) -> Any:
@@ -78,6 +79,8 @@ class SQLAlchemyAuthHubRepository:
     def _resource(row: Any) -> ResourceDefinition: return ResourceDefinition(row["id"], row["resource_type"], row["resource_key"], row["name"], row["module_id"], dict(row["metadata"] or {}))
     @staticmethod
     def _instance(row: Any) -> ResourceInstance: return ResourceInstance(row["id"], row["resource_id"], row["external_id"], row["owner_user_id"], row["organization_id"], dict(row["metadata"] or {}), _utc(row["created_at"]), _utc(row["updated_at"]))
+    @staticmethod
+    def _grant(row: Any) -> ResourceInstanceGrant: return ResourceInstanceGrant(row["id"], row["resource_instance_id"], row["user_id"], row["permission_code"], _utc(row["created_at"]))
     @staticmethod
     def _module(row: Any) -> ModuleDefinition: return ModuleDefinition(row["id"], row["name"], row["description"], dict(row["metadata"] or {}), list(row["permissions"] or []), list(row["apis"] or []), list(row["resources"] or []), _utc(row["updated_at"]))
 
@@ -107,7 +110,10 @@ class SQLAlchemyAuthHubRepository:
     def get_permission(self, code: str) -> Optional[Permission]: row = self._one(self.permissions, code=code); return self._permission(row) if row else None
     def save_permission(self, permission: Permission) -> Permission: self._save(self.permissions, {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "description": permission.description, "kind": permission.kind, "metadata": dict(permission.metadata), "enabled": permission.enabled, "created_at": permission.created_at, "updated_at": permission.updated_at}, key="code"); return permission
     def delete_permission(self, code: str) -> None:
-        with self.engine.begin() as conn: conn.execute(self._sa["delete"](self.role_permissions).where(self.role_permissions.c.permission_code == code)); conn.execute(self._sa["delete"](self.permissions).where(self.permissions.c.code == code))
+        with self.engine.begin() as conn:
+            conn.execute(self._sa["delete"](self.role_permissions).where(self.role_permissions.c.permission_code == code))
+            conn.execute(self._sa["delete"](self.resource_instance_grants).where(self.resource_instance_grants.c.permission_code == code))
+            conn.execute(self._sa["delete"](self.permissions).where(self.permissions.c.code == code))
     def list_permissions(self) -> List[Permission]: return [self._permission(row) for row in self._many(self.permissions, order_by=self.permissions.c.code)]
     def get_resource(self, resource_id: str) -> Optional[ResourceDefinition]: row = self._one(self.resources, id=resource_id); return self._resource(row) if row else None
     def save_resource(self, resource: ResourceDefinition) -> ResourceDefinition:
@@ -115,7 +121,12 @@ class SQLAlchemyAuthHubRepository:
         except self._sa["IntegrityError"] as error: raise ConflictError("resource already exists in this module") from error
         return resource
     def delete_resource(self, resource_id: str) -> None:
-        with self.engine.begin() as conn: conn.execute(self._sa["delete"](self.resources).where(self.resources.c.id == resource_id))
+        with self.engine.begin() as conn:
+            instance_ids = [row[0] for row in conn.execute(self._sa["select"](self.resource_instances.c.id).where(self.resource_instances.c.resource_id == resource_id)).all()]
+            if instance_ids:
+                conn.execute(self._sa["delete"](self.resource_instance_grants).where(self.resource_instance_grants.c.resource_instance_id.in_(instance_ids)))
+                conn.execute(self._sa["delete"](self.resource_instances).where(self.resource_instances.c.id.in_(instance_ids)))
+            conn.execute(self._sa["delete"](self.resources).where(self.resources.c.id == resource_id))
     def list_resources(self, module_id: Optional[str] = None) -> List[ResourceDefinition]: return [self._resource(row) for row in self._many(self.resources, *( [self.resources.c.module_id == module_id] if module_id else []), order_by=(self.resources.c.resource_type, self.resources.c.resource_key))]
     def get_resource_instance(self, instance_id: str) -> Optional[ResourceInstance]: row = self._one(self.resource_instances, id=instance_id); return self._instance(row) if row else None
     def get_resource_instance_by_external_id(self, resource_id: str, external_id: str) -> Optional[ResourceInstance]:
@@ -126,15 +137,30 @@ class SQLAlchemyAuthHubRepository:
         except self._sa["IntegrityError"] as error: raise ConflictError("resource instance already exists") from error
         return instance
     def delete_resource_instance(self, instance_id: str) -> None:
-        with self.engine.begin() as conn: conn.execute(self._sa["delete"](self.resource_instances).where(self.resource_instances.c.id == instance_id))
+        with self.engine.begin() as conn:
+            conn.execute(self._sa["delete"](self.resource_instance_grants).where(self.resource_instance_grants.c.resource_instance_id == instance_id))
+            conn.execute(self._sa["delete"](self.resource_instances).where(self.resource_instances.c.id == instance_id))
     def list_resource_instances(self, resource_id: Optional[str] = None, *, owner_user_id: Optional[str] = None, organization_id: Optional[str] = None) -> List[ResourceInstance]:
         criteria = [column == value for column, value in ((self.resource_instances.c.resource_id, resource_id), (self.resource_instances.c.owner_user_id, owner_user_id), (self.resource_instances.c.organization_id, organization_id)) if value is not None]
         return [self._instance(row) for row in self._many(self.resource_instances, *criteria, order_by=self.resource_instances.c.external_id)]
+    def replace_resource_instance_grants(self, resource_instance_id: str, grants: List[ResourceInstanceGrant]) -> List[ResourceInstanceGrant]:
+        with self.engine.begin() as conn:
+            conn.execute(self._sa["delete"](self.resource_instance_grants).where(self.resource_instance_grants.c.resource_instance_id == resource_instance_id))
+            if grants:
+                conn.execute(self._sa["insert"](self.resource_instance_grants), [{"id": grant.id, "resource_instance_id": grant.resource_instance_id, "user_id": grant.user_id, "permission_code": grant.permission_code, "created_at": grant.created_at} for grant in grants])
+        return self.list_resource_instance_grants(resource_instance_id)
+    def list_resource_instance_grants(self, resource_instance_id: str) -> List[ResourceInstanceGrant]:
+        return [self._grant(row) for row in self._many(self.resource_instance_grants, self.resource_instance_grants.c.resource_instance_id == resource_instance_id, order_by=(self.resource_instance_grants.c.user_id, self.resource_instance_grants.c.permission_code))]
+    def has_resource_instance_grant(self, resource_instance_id: str, user_id: str, permission_code: str) -> bool:
+        return self._one(self.resource_instance_grants, resource_instance_id=resource_instance_id, user_id=user_id, permission_code=permission_code) is not None
     def save_module(self, module: ModuleDefinition) -> ModuleDefinition: self._save(self.modules, {"id": module.id, "name": module.name, "description": module.description, "metadata": dict(module.metadata), "permissions": list(module.permissions), "apis": list(module.apis), "resources": list(module.resources), "updated_at": module.updated_at}); return module
     def delete_module(self, module_id: str) -> None:
         with self.engine.begin() as conn:
             resource_ids = [row[0] for row in conn.execute(self._sa["select"](self.resources.c.id).where(self.resources.c.module_id == module_id)).all()]
-            if resource_ids: conn.execute(self._sa["delete"](self.resource_instances).where(self.resource_instances.c.resource_id.in_(resource_ids)))
+            if resource_ids:
+                instance_ids = [row[0] for row in conn.execute(self._sa["select"](self.resource_instances.c.id).where(self.resource_instances.c.resource_id.in_(resource_ids))).all()]
+                if instance_ids: conn.execute(self._sa["delete"](self.resource_instance_grants).where(self.resource_instance_grants.c.resource_instance_id.in_(instance_ids)))
+                conn.execute(self._sa["delete"](self.resource_instances).where(self.resource_instances.c.resource_id.in_(resource_ids)))
             conn.execute(self._sa["delete"](self.resources).where(self.resources.c.module_id == module_id))
             conn.execute(self._sa["delete"](self.modules).where(self.modules.c.id == module_id))
     def get_module(self, module_id: str) -> Optional[ModuleDefinition]: row = self._one(self.modules, id=module_id); return self._module(row) if row else None

@@ -14,7 +14,7 @@ import time
 from typing import Any, Dict, List, Mapping, Optional, Set
 
 from .domain.errors import ConflictError
-from .domain.models import AuditEvent, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, Role, User
+from .domain.models import AuditEvent, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, ResourceInstanceGrant, Role, User
 
 
 class InMemoryAuthHubRepository:
@@ -27,6 +27,7 @@ class InMemoryAuthHubRepository:
         self.permissions: Dict[str, Permission] = {}
         self.resources: Dict[str, ResourceDefinition] = {}
         self.resource_instances: Dict[str, ResourceInstance] = {}
+        self.resource_instance_grants: Dict[tuple[str, str, str], ResourceInstanceGrant] = {}
         self.modules: Dict[str, ModuleDefinition] = {}
         self.user_roles: Dict[str, Set[str]] = {}
         self.role_permissions: Dict[str, Set[str]] = {}
@@ -58,12 +59,13 @@ class InMemoryAuthHubRepository:
     def delete_permission(self, code: str) -> None:
         self.permissions.pop(code, None)
         for items in self.role_permissions.values(): items.discard(code)
+        for key in [key for key in self.resource_instance_grants if key[2] == code]: self.resource_instance_grants.pop(key, None)
     def list_permissions(self) -> List[Permission]: return list(self.permissions.values())
     def get_resource(self, resource_id: str) -> Optional[ResourceDefinition]: return self.resources.get(resource_id)
     def save_resource(self, resource: ResourceDefinition) -> ResourceDefinition: self.resources[resource.id] = resource; return resource
     def delete_resource(self, resource_id: str) -> None:
         self.resources.pop(resource_id, None)
-        for instance_id in [item.id for item in self.resource_instances.values() if item.resource_id == resource_id]: self.resource_instances.pop(instance_id, None)
+        for instance_id in [item.id for item in self.resource_instances.values() if item.resource_id == resource_id]: self.delete_resource_instance(instance_id)
     def list_resources(self, module_id: Optional[str] = None) -> List[ResourceDefinition]: return [item for item in self.resources.values() if module_id is None or item.module_id == module_id]
     def get_resource_instance(self, instance_id: str) -> Optional[ResourceInstance]: return self.resource_instances.get(instance_id)
     def get_resource_instance_by_external_id(self, resource_id: str, external_id: str) -> Optional[ResourceInstance]: return next((item for item in self.resource_instances.values() if item.resource_id == resource_id and item.external_id == external_id), None)
@@ -72,9 +74,19 @@ class InMemoryAuthHubRepository:
         if existing and existing.id != instance.id: raise ConflictError("resource instance already exists")
         self.resource_instances[instance.id] = instance
         return instance
-    def delete_resource_instance(self, instance_id: str) -> None: self.resource_instances.pop(instance_id, None)
+    def delete_resource_instance(self, instance_id: str) -> None:
+        self.resource_instances.pop(instance_id, None)
+        for key in [key for key in self.resource_instance_grants if key[0] == instance_id]: self.resource_instance_grants.pop(key, None)
     def list_resource_instances(self, resource_id: Optional[str] = None, *, owner_user_id: Optional[str] = None, organization_id: Optional[str] = None) -> List[ResourceInstance]:
         return [item for item in self.resource_instances.values() if (resource_id is None or item.resource_id == resource_id) and (owner_user_id is None or item.owner_user_id == owner_user_id) and (organization_id is None or item.organization_id == organization_id)]
+    def replace_resource_instance_grants(self, resource_instance_id: str, grants: List[ResourceInstanceGrant]) -> List[ResourceInstanceGrant]:
+        for key in [key for key in self.resource_instance_grants if key[0] == resource_instance_id]: self.resource_instance_grants.pop(key, None)
+        for grant in grants: self.resource_instance_grants[(grant.resource_instance_id, grant.user_id, grant.permission_code)] = grant
+        return self.list_resource_instance_grants(resource_instance_id)
+    def list_resource_instance_grants(self, resource_instance_id: str) -> List[ResourceInstanceGrant]:
+        return sorted((item for item in self.resource_instance_grants.values() if item.resource_instance_id == resource_instance_id), key=lambda item: (item.user_id, item.permission_code))
+    def has_resource_instance_grant(self, resource_instance_id: str, user_id: str, permission_code: str) -> bool:
+        return (resource_instance_id, user_id, permission_code) in self.resource_instance_grants
     def save_module(self, module: ModuleDefinition) -> ModuleDefinition: self.modules[module.id] = module; return module
     def delete_module(self, module_id: str) -> None:
         self.modules.pop(module_id, None)

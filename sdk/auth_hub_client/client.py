@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -186,6 +186,14 @@ class AuthHubClient:
         headers = {"X-AuthHub-Registration-Key": self.registration_key} if self.registration_key else {}
         path = f"/api/resource-instances?{urlencode({'resource_id': resource_id, 'external_id': external_id})}"
         return self._request("DELETE", path, headers=headers)
+
+    def resource_instance_grants(self, access_token: str, instance_id: str) -> Mapping[str, Any]:
+        """Read explicit per-record grants. This is an administrator API."""
+        return self._request("GET", f"/api/resource-instances/{quote(str(instance_id), safe='')}/grants", headers={"Authorization": f"Bearer {access_token}"})
+
+    def replace_resource_instance_grants(self, access_token: str, instance_id: str, grants: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        """Replace explicit per-record grants. This is an administrator API."""
+        return self._request("PUT", f"/api/resource-instances/{quote(str(instance_id), safe='')}/grants", {"grants": [dict(item) for item in grants]}, headers={"Authorization": f"Bearer {access_token}"})
 
     def _request(self, method: str, path: str, payload: Optional[Mapping[str, Any]] = None, *, headers: Optional[Mapping[str, str]] = None) -> Mapping[str, Any]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None

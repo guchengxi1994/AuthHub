@@ -99,6 +99,51 @@ function Navigation() {
 </Permission>
 ```
 
+## Resource Instances
+
+The permission snapshot is correct for routes, menus, and ordinary actions. A concrete business record, MCP Server, or MCP Tool can additionally have an owner, an organization scope, or an administrator-managed collaboration grant. Render these elements after the business backend checks that exact record.
+
+The browser still does not call AuthHub directly. Expose a protected business endpoint that forwards to `check_resource_or_raise()` or returns its AuthHub decision, then provide that function to the lightweight resource provider:
+
+```tsx
+import {
+  ResourcePermission,
+  ResourcePermissionProvider,
+  type ResourcePermissionRequest,
+} from "@auth-hub/react";
+
+async function checkResource(request: ResourcePermissionRequest) {
+  const response = await fetch("/api/session/check-resource", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) throw new Error("Unable to check resource permission");
+  return response.json(); // { allowed, authenticated, reason }
+}
+
+function ServerActions({ serverId }: { serverId: string }) {
+  return (
+    <ResourcePermission
+      request={{
+        permission: "mcp:mcp_server:server:manage",
+        resourceId: "mcp:mcp_server:server",
+        externalId: serverId,
+      }}
+      loadingFallback={<span />}
+    >
+      <button type="button">管理 Server</button>
+    </ResourcePermission>
+  );
+}
+
+function App() {
+  return <ResourcePermissionProvider checkResource={checkResource} cacheKey={sessionId}><ServerActions serverId="server-100" /></ResourcePermissionProvider>;
+}
+```
+
+`ResourcePermissionProvider` deduplicates equal in-flight and completed checks for the active session. It is presentation only: the actual MCP/API operation must still call the Python SDK's `require_resource_permission` or `check_resource_or_raise()`.
+
 ## Resource Registration
 
 The React package never has a registration key and never registers resources directly. The business service registers frontend resources with its Python manifest, usually at startup:

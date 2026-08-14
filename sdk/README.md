@@ -92,6 +92,8 @@ authz = client.check_resource_or_raise(
 
 `manifest.resource_id("order")` derives `knowledge:entity:order` from the declared module and resource; application code should not hardcode it. Set `PermissionSpec(..., scope="owner")` or `scope="organization"` for those checks. `global` skips instance ownership checks.
 
+AuthHub administrators may additionally grant one user a named operation for one registered record in the management console. Such a collaboration grant is evaluated by the same `check_resource_or_raise()` call and applies only to that external record; it does not assign a global role or change the business database. Keep the record-level route dependency in place even when a frontend has rendered a collaboration control.
+
 The business database remains the source of truth. Create/update the business record first and then call the idempotent registration method; after deleting the business record, call `client.unregister_resource_instance(manifest.resource_id("order"), str(order.id))`. AuthHub never deletes business records and deliberately rejects deleting a resource definition or module while instance indexes remain.
 
 ## SQLAlchemy Transactional Outbox

@@ -7,12 +7,13 @@ from .models import (
     Permission,
     ResourceDefinition,
     ResourceInstance,
+    ResourceInstanceGrant,
     Role,
     User,
 )
 
 __all__ = [
     "AuditEvent", "AuthenticationError", "AuthorizationError", "AuthorizationResult", "ConflictError",
-    "ModuleDefinition", "NotFoundError", "Organization", "Permission", "ResourceDefinition", "ResourceInstance", "Role",
+    "ModuleDefinition", "NotFoundError", "Organization", "Permission", "ResourceDefinition", "ResourceInstance", "ResourceInstanceGrant", "Role",
     "User", "ValidationError",
 ]

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .domain.errors import AuthenticationError, AuthorizationError, ConflictError, NotFoundError, ValidationError
-from .domain.models import AuditEvent, AuthorizationResult, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, Role, User, new_id
+from .domain.models import AuditEvent, AuthorizationResult, ModuleDefinition, Organization, Permission, ResourceDefinition, ResourceInstance, ResourceInstanceGrant, Role, User, new_id
 from .infrastructure import CacheTokenService, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, InMemoryTokenService, SimplePasswordHasher
 from .sqlalchemy_infrastructure import SQLAlchemyAuthHubRepository, SQLAlchemyAuditLog, SQLAlchemyTokenService
 from .ports.repositories import AuthHubRepository
@@ -309,6 +309,39 @@ class AuthHub:
         if not instance: raise NotFoundError("resource_instance", instance_id)
         return instance
 
+    def resource_instance_grants(self, instance_id: str) -> List[ResourceInstanceGrant]:
+        self.resource_instance(instance_id)
+        return self.repository.list_resource_instance_grants(instance_id)
+
+    def replace_resource_instance_grants(self, instance_id: str, grants: Sequence[Mapping[str, Any]], *, actor_id: Optional[str] = None) -> List[ResourceInstanceGrant]:
+        """Replace explicit per-record grants without changing global RBAC.
+
+        Each grant names a user and one or more permissions for this exact
+        resource definition.  A grant is an exception for one record, never a
+        substitute for assigning a global role.
+        """
+        instance = self.resource_instance(instance_id)
+        normalized: set[tuple[str, str]] = set()
+        for item in grants:
+            if not isinstance(item, Mapping): raise ValidationError("each resource grant must be an object")
+            user_id = str(item.get("user_id") or "")
+            if not user_id: raise ValidationError("resource grant user_id is required")
+            self._user_or_raise(user_id)
+            permission_codes = item.get("permission_codes") or item.get("permissions") or []
+            if isinstance(permission_codes, str): permission_codes = [permission_codes]
+            if not isinstance(permission_codes, Sequence): raise ValidationError("resource grant permission_codes must be a list")
+            for code in permission_codes:
+                permission_code = str(code or "")
+                permission = self.repository.get_permission(permission_code)
+                if not permission or not permission.enabled: raise NotFoundError("permission", permission_code)
+                if permission.metadata.get("resource_id") != instance.resource_id:
+                    raise ValidationError("resource grant permission must belong to the resource instance definition")
+                normalized.add((user_id, permission_code))
+        stored = self.repository.replace_resource_instance_grants(instance.id, [ResourceInstanceGrant(new_id(), instance.id, user_id, permission_code) for user_id, permission_code in sorted(normalized)])
+        for user_id, _ in normalized: self.invalidate_user_permissions(user_id)
+        self._audit("resource.instance.grants.replace", actor_id, "resource_instance", instance.id, "success", {"grant_count": len(stored)})
+        return stored
+
     def can_access_resource_instance(self, access_token: Optional[str], permission: str, instance_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
         instance = self.resource_instance(instance_id)
         return self.check_permission(access_token, permission, resource=instance.external_id, context={"resource_instance_id": instance.id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, **dict(context or {})})
@@ -358,6 +391,17 @@ class AuthHub:
         if not known_permission or not known_permission.enabled:
             return AuthorizationResult(False, True, permission, user.id, reason="PERMISSION_NOT_FOUND")
         if user.is_super_admin: return AuthorizationResult(True, True, permission, user.id, matched_by="system_admin")
+        instance_id = str((context or {}).get("resource_instance_id") or "")
+        instance = self.repository.get_resource_instance(instance_id) if instance_id else None
+        expected_resource_id = known_permission.metadata.get("resource_id")
+        if instance_id and expected_resource_id and (not instance or instance.resource_id != expected_resource_id):
+            result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
+            self._audit("authorization.check", user.id, "permission", permission, "denied", {"resource": resource, "context": dict(context or {})})
+            return result
+        if instance and self.repository.has_resource_instance_grant(instance.id, user.id, permission):
+            result = AuthorizationResult(True, True, permission, user.id, matched_by="resource_grant")
+            self._audit("authorization.check", user.id, "permission", permission, "allowed", {"resource": resource, "context": dict(context or {})})
+            return result
         cache_key = f"permissions:{user.id}"
         permissions = self.cache.get(cache_key)
         if permissions is None:
@@ -368,9 +412,6 @@ class AuthHub:
             scope = str(known_permission.metadata.get("scope") or "global")
             result = AuthorizationResult(True, True, permission, user.id, matched_by="rbac")
             if scope != "global":
-                instance_id = str((context or {}).get("resource_instance_id") or "")
-                instance = self.repository.get_resource_instance(instance_id) if instance_id else None
-                expected_resource_id = known_permission.metadata.get("resource_id")
                 if not instance or (expected_resource_id and instance.resource_id != expected_resource_id):
                     result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
                 elif scope == "owner" and instance.owner_user_id != user.id:
@@ -541,6 +582,8 @@ class AuthHub:
     def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "scope": permission.metadata.get("scope", "global"), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
     @staticmethod
     def resource_instance_dict(instance: ResourceInstance) -> Dict[str, Any]: return {"id": instance.id, "resource_id": instance.resource_id, "external_id": instance.external_id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, "metadata": dict(instance.metadata), "created_at": instance.created_at.isoformat(), "updated_at": instance.updated_at.isoformat()}
+    @staticmethod
+    def resource_instance_grant_dict(grant: ResourceInstanceGrant) -> Dict[str, Any]: return {"id": grant.id, "resource_instance_id": grant.resource_instance_id, "user_id": grant.user_id, "permission_code": grant.permission_code, "created_at": grant.created_at.isoformat()}
     @staticmethod
     def resource_dict(resource: ResourceDefinition) -> Dict[str, Any]: return {"id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "name": resource.name, "module_id": resource.module_id, "metadata": dict(resource.metadata)}
     @staticmethod
