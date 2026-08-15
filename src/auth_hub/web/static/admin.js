@@ -148,11 +148,12 @@ function permissionGroups(permissions, modules, resources) {
   const grouped = new Map();
   permissions.forEach(permission => {
     const resource = resourceById[permission.resource_id];
-    const moduleName = moduleNames[permission.module_id] || '系统权限';
+    const builtIn = permission.module_id === 'authhub' || String(permission.code || '').startsWith('authhub:');
+    const moduleName = moduleNames[permission.module_id] || (builtIn ? 'AuthHub 内置' : '未归属模块');
     const resourceName = resource?.name || permission.resource_key || '通用操作';
     const resourceType = resource?.resource_type || permission.resource_type;
     const key = `${permission.module_id || 'system'}:${permission.resource_id || permission.code}`;
-    if (!grouped.has(key)) grouped.set(key, { key, moduleName, resourceName, resourceType, permissions: [] });
+    if (!grouped.has(key)) grouped.set(key, { key, moduleId: permission.module_id || '', moduleName, resourceName, resourceType, builtIn, permissions: [] });
     grouped.get(key).permissions.push(permission);
   });
   return [...grouped.values()]
@@ -164,10 +165,39 @@ function selectionToolbar(inputName) {
   return `<div class="selection-toolbar"><span>已选 <strong data-selected-count="${esc(inputName)}">0</strong></span><div><button type="button" class="btn-link" data-selection="all" data-selection-name="${esc(inputName)}">全选</button><button type="button" class="btn-link" data-selection="none" data-selection-name="${esc(inputName)}">清空</button><button type="button" class="btn-link" data-selection="invert" data-selection-name="${esc(inputName)}">反选</button></div></div>`;
 }
 
+function permissionSections(groups) {
+  const modules = new Map();
+  groups.forEach(group => {
+    const key = group.moduleId || (group.builtIn ? 'authhub' : 'unassigned');
+    if (!modules.has(key)) modules.set(key, { key, name: group.moduleName, groups: [] });
+    modules.get(key).groups.push(group);
+  });
+  const sortedModules = [...modules.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
+  return [
+    { key: 'authhub', label: 'AuthHub 内置权限', modules: sortedModules.filter(module => module.key === 'authhub') },
+    { key: 'business', label: '业务系统权限', modules: sortedModules.filter(module => module.key !== 'authhub') }
+  ].filter(section => section.modules.length);
+}
+
 function permissionOptions(groups, inputName, selectedCodes = new Set()) {
   if (!groups.length) return '<p class="selection-list-empty">当前资源还没有可分配的启用权限。</p>';
   const scopeLabels = { global: '全部', owner: '本人归属', organization: '组织归属' };
-  return groups.map(group => `<section class="permission-group"><div class="permission-group-heading"><div><span>${esc(group.moduleName)}</span><strong>${esc(group.resourceName)}</strong></div><small>${esc(resourceLabel(group.resourceType))}</small></div>${group.permissions.map(permission => `<label class="permission-option"><input type="checkbox" name="${esc(inputName)}" value="${esc(permission.code)}" ${selectedCodes.has(permission.code) ? 'checked' : ''} ${permission.enabled ? '' : 'disabled'}><span><strong>${esc(permission.name)}</strong><small>${esc(actionLabel(permission.action))} · ${esc(scopeLabels[permission.scope || 'global'] || permission.scope || '全部')} · ${esc(permission.code)}</small></span>${permission.enabled ? '' : badge('停用', 'muted')}</label>`).join('')}</section>`).join('');
+  const renderResource = group => {
+    const selectedCount = group.permissions.filter(permission => selectedCodes.has(permission.code)).length;
+    const enabledCount = group.permissions.filter(permission => permission.enabled).length;
+    const enabledSelectedCount = group.permissions.filter(permission => permission.enabled && selectedCodes.has(permission.code)).length;
+    const fullySelected = enabledCount > 0 && enabledCount === enabledSelectedCount;
+    return `<details class="permission-group" data-permission-group ${selectedCount ? 'open' : ''}><summary class="permission-group-heading"><div><strong>${esc(group.resourceName)}</strong></div><div class="permission-group-meta"><span data-permission-group-selected>${selectedCount} / ${group.permissions.length}</span><small>${esc(resourceLabel(group.resourceType))}</small><label class="permission-group-select" title="选择此资源的全部启用权限"><input type="checkbox" data-permission-group-select ${fullySelected ? 'checked' : ''} ${enabledCount ? '' : 'disabled'}><span>全选</span></label><i data-lucide="chevron-down" aria-hidden="true"></i></div></summary><div class="permission-group-options">${group.permissions.map(permission => `<label class="permission-option"><input type="checkbox" name="${esc(inputName)}" value="${esc(permission.code)}" ${selectedCodes.has(permission.code) ? 'checked' : ''} ${permission.enabled ? '' : 'disabled'}><span><strong>${esc(permission.name)}</strong><small>${esc(actionLabel(permission.action))} · ${esc(scopeLabels[permission.scope || 'global'] || permission.scope || '全部')} · ${esc(permission.code)}</small></span>${permission.enabled ? '' : badge('停用', 'muted')}</label>`).join('')}</div></details>`;
+  };
+  return permissionSections(groups).map(section => {
+    const permissionCount = section.modules.reduce((total, module) => total + module.groups.reduce((count, group) => count + group.permissions.length, 0), 0);
+    return `<section class="permission-section" data-permission-section><div class="permission-section-heading"><strong>${esc(section.label)}</strong><small>${section.modules.length} 个模块 · ${permissionCount} 项</small></div>${section.modules.map(module => {
+      const hasSelectedPermission = module.groups.some(group => group.permissions.some(permission => selectedCodes.has(permission.code)));
+      const resourceCount = module.groups.length;
+      const modulePermissionCount = module.groups.reduce((count, group) => count + group.permissions.length, 0);
+      return `<details class="permission-module-group" data-permission-module-group ${hasSelectedPermission ? 'open' : ''}><summary><span>${esc(module.name)}</span><small>${resourceCount} 个资源 · ${modulePermissionCount} 项</small><i data-lucide="chevron-down" aria-hidden="true"></i></summary><div>${module.groups.map(renderResource).join('')}</div></details>`;
+    }).join('')}</section>`;
+  }).join('');
 }
 
 function updateSelectedCount(root, inputName) {
@@ -175,22 +205,84 @@ function updateSelectedCount(root, inputName) {
   $$(`[data-selected-count="${inputName}"]`, root).forEach(item => { item.textContent = count; });
 }
 
+function updatePermissionGroupSelection(root, inputName) {
+  $$('[data-permission-group]', root).forEach(group => {
+    const permissions = $$(`input[name="${inputName}"]`, group);
+    const enabledPermissions = permissions.filter(input => !input.disabled);
+    const selectedCount = permissions.filter(input => input.checked).length;
+    const selectedEnabledCount = enabledPermissions.filter(input => input.checked).length;
+    $('[data-permission-group-selected]', group).textContent = `${selectedCount} / ${permissions.length}`;
+    const control = $('[data-permission-group-select]', group);
+    control.checked = enabledPermissions.length > 0 && selectedEnabledCount === enabledPermissions.length;
+    control.indeterminate = selectedEnabledCount > 0 && selectedEnabledCount < enabledPermissions.length;
+  });
+}
+
 function bindSelectionToolbar(root, inputName, onChange = () => {}) {
   const inputs = () => $$(`input[name="${inputName}"]`, root).filter(item => !item.disabled);
+  const update = () => {
+    updateSelectedCount(root, inputName);
+    updatePermissionGroupSelection(root, inputName);
+    onChange();
+  };
   $$(`[data-selection-name="${inputName}"]`, root).forEach(control => {
     control.onclick = () => {
       const action = control.dataset.selection;
       inputs().forEach(input => { input.checked = action === 'all' ? true : action === 'none' ? false : !input.checked; });
-      updateSelectedCount(root, inputName); onChange();
+      update();
     };
   });
-  inputs().forEach(input => { input.onchange = () => { updateSelectedCount(root, inputName); onChange(); }; });
-  updateSelectedCount(root, inputName);
+  $$('[data-permission-group-select]', root).forEach(control => {
+    control.onclick = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      control.checked = !control.checked;
+      control.dispatchEvent(new Event('change'));
+    };
+    control.onchange = () => {
+      $$(`input[name="${inputName}"]`, control.closest('[data-permission-group]')).filter(input => !input.disabled).forEach(input => { input.checked = control.checked; });
+      update();
+    };
+  });
+  inputs().forEach(input => { input.onchange = update; });
+  update();
 }
 
 function filterPermissionOptions(root, query) {
-  $$('.permission-option', root).forEach(option => option.classList.toggle('hidden', !option.textContent.toLowerCase().includes(query)));
-  $$('.permission-group', root).forEach(group => group.classList.toggle('hidden', !$('.permission-option:not(.hidden)', group)));
+  const normalizedQuery = query.trim().toLowerCase();
+  $$('.permission-group', root).forEach(group => {
+    $$('.permission-option', group).forEach(option => option.classList.toggle('hidden', !option.textContent.toLowerCase().includes(normalizedQuery)));
+    const hasVisibleOption = Boolean($('.permission-option:not(.hidden)', group));
+    group.classList.toggle('hidden', !hasVisibleOption);
+    if (normalizedQuery && hasVisibleOption) group.open = true;
+  });
+  $$('[data-permission-module-group]', root).forEach(module => {
+    const hasVisibleGroup = Boolean($('.permission-group:not(.hidden)', module));
+    module.classList.toggle('hidden', !hasVisibleGroup);
+    if (normalizedQuery && hasVisibleGroup) module.open = true;
+  });
+  $$('[data-permission-section]', root).forEach(section => section.classList.toggle('hidden', !$('.permission-module-group:not(.hidden)', section)));
+}
+
+function permissionDirectory(groups, scopeLabels) {
+  const compact = groups.length > 4 || groups.reduce((total, group) => total + group.permissions.length, 0) > 18;
+  return `<section class="permission-directory">${permissionSections(groups).map(section => `<section class="permission-section permission-directory-section" data-permission-directory-section><div class="permission-section-heading"><strong>${esc(section.label)}</strong><small>${section.modules.length} 个模块</small></div>${section.modules.map(module => `<details class="permission-directory-module" data-permission-directory-module ${compact ? '' : 'open'}><summary><span>${esc(module.name)}</span><small>${module.groups.length} 个资源 · ${module.groups.reduce((count, group) => count + group.permissions.length, 0)} 项</small><i data-lucide="chevron-down" aria-hidden="true"></i></summary><div>${module.groups.map(group => `<details class="permission-directory-group" data-permission-directory-group ${compact ? '' : 'open'}><summary><div><strong>${esc(group.resourceName)}</strong><span>${esc(resourceLabel(group.resourceType))}</span></div><div><small>${group.permissions.length} 项</small><i data-lucide="chevron-down" aria-hidden="true"></i></div></summary><div class="permission-directory-items">${group.permissions.map(permission => `<div class="permission-directory-item" data-permission-directory-item><div><strong>${esc(permission.name)}</strong><code>${esc(permission.code)}</code></div><div>${badge(actionLabel(permission.action), 'blue')}${badge(scopeLabels[permission.scope || 'global'] || permission.scope || '全部', permission.scope === 'global' ? 'muted' : 'active')}${status(permission.enabled)}</div></div>`).join('')}</div></details>`).join('')}</div></details>`).join('')}</section>`).join('')}</section>`;
+}
+
+function filterPermissionDirectory(root, query) {
+  const normalizedQuery = query.trim().toLowerCase();
+  $$('[data-permission-directory-group]', root).forEach(group => {
+    $$('[data-permission-directory-item]', group).forEach(item => item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(normalizedQuery)));
+    const hasVisibleItem = Boolean($('[data-permission-directory-item]:not(.hidden)', group));
+    group.classList.toggle('hidden', !hasVisibleItem);
+    if (normalizedQuery && hasVisibleItem) group.open = true;
+  });
+  $$('[data-permission-directory-module]', root).forEach(module => {
+    const hasVisibleGroup = Boolean($('.permission-directory-group:not(.hidden)', module));
+    module.classList.toggle('hidden', !hasVisibleGroup);
+    if (normalizedQuery && hasVisibleGroup) module.open = true;
+  });
+  $$('[data-permission-directory-section]', root).forEach(section => section.classList.toggle('hidden', !$('.permission-directory-module:not(.hidden)', section)));
 }
 
 async function renderOverview() {
@@ -360,6 +452,7 @@ async function showRolePermissions(roleId) {
     filterPermissionOptions(el, event.target.value.toLowerCase());
   };
   bindSelectionToolbar(el, 'permission_codes');
+  refreshIcons();
   $('#role-permissions-form', el).onsubmit = async event => {
     event.preventDefault();
     const selected = new Set(new FormData(event.currentTarget).getAll('permission_codes'));
@@ -380,20 +473,12 @@ async function renderPermissions() {
   ]);
   const scopeLabels = { global: '全部', owner: '本人归属', organization: '组织归属' };
   const groups = permissionGroups(permissions.items, modules.items, resources.items);
-  const rows = groups.map(group => `<tr class="permission-table-group"><td colspan="4"><span>${esc(group.moduleName)}</span><strong>${esc(group.resourceName)}</strong><small>${esc(resourceLabel(group.resourceType))}</small></td></tr>${group.permissions.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(permission.code)}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${badge(scopeLabels[permission.scope || 'global'] || permission.scope || '全部', permission.scope === 'global' ? 'muted' : 'active')}</td><td>${status(permission.enabled)}</td></tr>`).join('')}`).join('');
   const createPermission = can('entity', 'permissions', 'create') && can('entity', 'modules', 'read') && can('entity', 'resources', 'read') && can('entity', 'roles', 'read');
   $('#content').innerHTML = pageHeader('权限', createPermission ? button('新增权限', 'new-permission', 'plus', 'primary') : '')
-    + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选模块、资源或权限"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissions.items.length} 项权限</span></div>`
-    + table(['权限', '操作', '数据范围', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
+    + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选模块、资源或权限"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissionSections(groups).length} 类 · ${groups.length} 个资源 · ${permissions.items.length} 项权限</span></div>`
+    + (groups.length ? panel(permissionDirectory(groups, scopeLabels), 'overflow-hidden') : panel(empty('暂无权限。先创建业务模块和资源，再配置可授权操作。')));
   $('#permission-list-filter').oninput = event => {
-    const value = event.target.value.toLowerCase();
-    $$('[data-permission-row]').forEach(row => row.classList.toggle('hidden', !row.textContent.toLowerCase().includes(value)));
-    $$('.permission-table-group').forEach(row => {
-      let next = row.nextElementSibling;
-      let hasVisible = false;
-      while (next && !next.classList.contains('permission-table-group')) { if (!next.classList.contains('hidden')) hasVisible = true; next = next.nextElementSibling; }
-      row.classList.toggle('hidden', !hasVisible);
-    });
+    filterPermissionDirectory($('#content'), event.target.value);
   };
   refreshIcons();
 }
@@ -519,6 +604,7 @@ async function showInstanceGrants(instanceId) {
     const selected = grantsByUser.get(currentUserId) || new Set();
     $('#instance-grant-options', el).innerHTML = permissionOptions(groups, 'grant_permission_codes', selected);
     bindSelectionToolbar(el, 'grant_permission_codes', persistCurrentSelection);
+    refreshIcons();
   };
   renderOptions(); renderSummary();
   $('#form-cancel', el).onclick = () => el.close();

@@ -50,13 +50,32 @@ textarea.field { height: auto; min-height: 84px; padding: .65rem .7rem; line-hei
 .selection-toolbar strong { color: #334155; }
 .btn-link { min-height: 28px; padding: 0 .45rem; border-radius: 6px; color: #1e62bc; font-size: 12px; font-weight: 600; }
 .btn-link:hover { background: #eef5ff; }
+.permission-section + .permission-section { border-top: 1px solid #dbe5f0; }
+.permission-section-heading { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: .75rem; padding: 0 .85rem; background: #f1f5f9; }
+.permission-section-heading strong { color: #334155; font-size: 12px; }
+.permission-section-heading small { color: #64748b; font-size: 11px; }
+.permission-module-group { border-bottom: 1px solid #e7edf4; }
+.permission-module-group:last-child { border-bottom: 0; }
+.permission-module-group > summary { display: flex; min-height: 42px; align-items: center; gap: .55rem; padding: 0 .85rem; background: #fbfdff; color: #334155; cursor: pointer; list-style: none; }
+.permission-module-group > summary::-webkit-details-marker, .permission-group-heading::-webkit-details-marker, .permission-directory-module > summary::-webkit-details-marker, .permission-directory-group summary::-webkit-details-marker { display: none; }
+.permission-module-group > summary > span { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.permission-module-group > summary > small { flex: none; color: #64748b; font-size: 11px; }
+.permission-module-group > summary > svg, .permission-group-meta > svg, .permission-directory-module > summary > svg, .permission-directory-group summary > div:last-child > svg { width: 15px; height: 15px; flex: none; color: #94a3b8; transition: transform .15s ease; }
+.permission-module-group[open] > summary > svg, .permission-group[open] .permission-group-meta > svg, .permission-directory-module[open] > summary > svg, .permission-directory-group[open] summary > div:last-child > svg { transform: rotate(180deg); }
 .permission-group { border-bottom: 1px solid #e7edf4; }
 .permission-group:last-child { border-bottom: 0; }
-.permission-group-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 44px; padding: .45rem .7rem; border-bottom: 1px solid #edf1f5; background: #f8fafc; }
+.permission-group-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 44px; padding: .45rem .7rem .45rem 1.15rem; background: #f8fafc; cursor: pointer; list-style: none; }
+.permission-group[open] > .permission-group-heading { border-bottom: 1px solid #edf1f5; }
 .permission-group-heading > div { display: flex; min-width: 0; align-items: baseline; gap: .5rem; }
 .permission-group-heading span { overflow: hidden; color: #64748b; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .permission-group-heading strong { overflow: hidden; color: #334155; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .permission-group-heading small { flex: none; color: #64748b; font-size: 11px; }
+.permission-group-meta { flex: none; align-items: center !important; gap: .55rem !important; }
+.permission-group-meta > span { color: #1e62bc; font-size: 11px; font-weight: 700; }
+.permission-group-select { display: inline-flex; align-items: center; gap: .3rem; border-radius: 5px; padding: .2rem .35rem; color: #475569; font-size: 11px; font-weight: 600; cursor: pointer; }
+.permission-group-select:hover { background: #eaf2fd; color: #1e62bc; }
+.permission-group-select input { width: 13px; height: 13px; margin: 0; accent-color: #2873d3; }
+.permission-group-options { background: #fff; }
 .permission-option > span { display: grid; min-width: 0; flex: 1; gap: 2px; }
 .permission-option strong { overflow: hidden; color: #334155; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .permission-option small { overflow: hidden; color: #64748b; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -95,6 +114,27 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .permission-table-group td > span { margin-right: .5rem; color: #64748b; font-size: 12px; }
 .permission-table-group td > strong { color: #334155; font-size: 13px; }
 .permission-table-group td > small { margin-left: .55rem; color: #64748b; font-size: 11px; }
+.permission-directory-section + .permission-directory-section { border-top: 6px solid #f6f8fb; }
+.permission-directory-module { border-bottom: 1px solid #e7edf4; }
+.permission-directory-module:last-child { border-bottom: 0; }
+.permission-directory-module > summary { display: flex; min-height: 46px; align-items: center; gap: .55rem; padding: 0 .9rem; background: #fbfdff; cursor: pointer; list-style: none; }
+.permission-directory-module > summary:hover, .permission-directory-group summary:hover { background: #f6faff; }
+.permission-directory-module > summary > span { min-width: 0; flex: 1; overflow: hidden; color: #334155; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.permission-directory-module > summary > small { flex: none; color: #64748b; font-size: 11px; }
+.permission-directory-group { border-top: 1px solid #edf1f5; }
+.permission-directory-group summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem .9rem .55rem 1.35rem; cursor: pointer; list-style: none; }
+.permission-directory-group summary > div:first-child { display: grid; min-width: 0; gap: .15rem; }
+.permission-directory-group summary strong { overflow: hidden; color: #334155; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.permission-directory-group summary span { overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.permission-directory-group summary > div:last-child { display: flex; flex: none; align-items: center; gap: .6rem; }
+.permission-directory-group summary small { color: #64748b; font-size: 11px; white-space: nowrap; }
+.permission-directory-items { border-top: 1px solid #edf1f5; background: #fbfdff; }
+.permission-directory-item { display: flex; min-height: 57px; align-items: center; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #edf1f5; padding: .6rem .9rem .6rem 1.85rem; }
+.permission-directory-item:last-child { border-bottom: 0; }
+.permission-directory-item > div:first-child { display: grid; min-width: 0; gap: .2rem; }
+.permission-directory-item strong { overflow: hidden; color: #334155; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.permission-directory-item code { overflow: hidden; color: #64748b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.permission-directory-item > div:last-child { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: .4rem; }
 .detail-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid #e1e8f0; border-radius: 8px; background: #e7edf4; }
 .detail-strip > div { min-width: 0; padding: .65rem .75rem; background: #fff; }
 .detail-strip span, .detail-strip strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -118,4 +158,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .sidebar-backdrop { display: block; }
   .detail-strip { grid-template-columns: 1fr; }
   .collaborator-summary > div { grid-template-columns: 1fr; gap: .2rem; }
+  .permission-group-heading { align-items: flex-start; }
+  .permission-group-meta { gap: .35rem !important; }
+  .permission-group-meta > small, .permission-group-select > span { display: none; }
+  .permission-directory-item { align-items: flex-start; flex-direction: column; gap: .45rem; padding-left: 1.35rem; }
+  .permission-directory-item > div:last-child { flex-wrap: wrap; justify-content: flex-start; }
 }

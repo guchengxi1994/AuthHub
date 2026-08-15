@@ -2,6 +2,14 @@
 
 All notable changes to AuthHub are documented in this file.
 
+## [0.3.1] - 2026-08-15
+
+### Changed
+
+- Separate AuthHub built-in permissions from business-system permissions in the admin console.
+- Group large permission sets by permission category, module, and resource; collapse groups by default when the list is large.
+- Automatically expand selected groups and search matches, with per-resource select-all controls in permission assignment forms.
+
 ## [0.3.0] - 2026-08-15
 
 ### Added

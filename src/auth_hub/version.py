@@ -6,7 +6,7 @@ import os
 from typing import Dict
 
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 
 def runtime_release() -> Dict[str, str]:
