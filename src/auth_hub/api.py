@@ -96,9 +96,18 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     async def user_permissions(authorization: Optional[str] = Header(None)): return {"permissions": hub.user_permissions(hub.authenticate(_bearer(authorization)).id)}
 
     @app.get("/api/users")
-    async def list_users(authorization: Optional[str] = Header(None)):
+    async def list_users(query: str = "", limit: Optional[int] = None, authorization: Optional[str] = Header(None)):
         _require_system_permission(hub, authorization, "entity", "users", "read")
-        return {"items": [hub.user_dict(item) for item in hub.list_users()]}
+        users = hub.list_users()
+        needle = query.strip().casefold()
+        if needle:
+            users = [
+                item for item in users
+                if needle in " ".join((item.username, item.display_name, item.email or "")).casefold()
+            ]
+        if limit is not None:
+            users = users[:max(1, min(limit, 100))]
+        return {"items": [hub.user_dict(item) for item in users]}
 
     @app.post("/api/users")
     async def create_user(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):

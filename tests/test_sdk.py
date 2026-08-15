@@ -10,10 +10,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk"))
 
 from auth_hub import AuthHub, AuthHubSettings
 from auth_hub.api import _module_registrar_actor
-from auth_hub_client import AuthHubOutbox, AuthHubOutboxDispatcher, ModuleManifest, PermissionSpec, ResourceSpec, track_resource_instance, untrack_resource_instance
+from auth_hub_client import AuthHubClient, AuthHubOutbox, AuthHubOutboxDispatcher, ModuleManifest, PermissionSpec, ResourceSpec, track_resource_instance, untrack_resource_instance
 
 
 class ClientSdkTests(unittest.TestCase):
+    def test_client_lists_users_with_caller_token(self):
+        client = AuthHubClient("http://auth-hub")
+        with patch.object(client, "_request", return_value={"items": []}) as request:
+            self.assertEqual(client.list_users("user-token"), {"items": []})
+        request.assert_called_once_with("GET", "/api/users", headers={"Authorization": "Bearer user-token"})
+
+        with patch.object(client, "_request", return_value={"items": []}) as request:
+            client.list_users("user-token", query="张三", limit=50)
+        request.assert_called_once_with("GET", "/api/users?query=%E5%BC%A0%E4%B8%89&limit=50", headers={"Authorization": "Bearer user-token"})
+
     def test_manifest_uses_business_declared_mcp_tool_and_stable_code(self):
         manifest = ModuleManifest(
             module_id="knowledge",

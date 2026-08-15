@@ -203,6 +203,14 @@ class AuthHubClient:
         path = f"/api/auth/users/resolve?{urlencode({'username': username})}"
         return self._request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
 
+    def list_users(self, access_token: str, *, query: str = "", limit: Optional[int] = None) -> Mapping[str, Any]:
+        """List users when the caller holds AuthHub's users-read permission."""
+        params: Dict[str, Any] = {}
+        if query.strip(): params["query"] = query.strip()
+        if limit is not None: params["limit"] = limit
+        path = "/api/users" if not params else f"/api/users?{urlencode(params)}"
+        return self._request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
+
     def resource_instance_grants_by_external_id(self, access_token: str, resource_id: str, external_id: str) -> Mapping[str, Any]:
         """Read one resource's grants as its owner or a system administrator."""
         path = f"/api/resource-instances/by-external/grants?{urlencode({'resource_id': resource_id, 'external_id': external_id})}"
