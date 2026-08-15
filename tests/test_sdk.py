@@ -107,6 +107,42 @@ class ClientSdkTests(unittest.TestCase):
             self.assertTrue(result["allowed"])
             self.assertEqual(result["matched_by"], "resource_grant")
 
+    def test_resource_owner_can_share_by_external_id_without_admin_access(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory()
+        module = hub.register_module("skills", "Skills")
+        resource = hub.create_resource(module.id, "custom", "skill", "MCP Skill")
+        permission = hub.create_permission(None, "Execute Skill", module_id=module.id, resource_id=resource.id, action="execute", scope="owner")
+        owner = hub.create_user("skill-owner", "password")
+        recipient = hub.create_user("skill-user", "password")
+        hub.register_resource_instance(resource.id, "customer-summary", owner_user_id=owner.id)
+        app = create_app(auth_hub=hub)
+
+        with TestClient(app) as client:
+            owner_token = client.post("/api/auth/login", json={"username": "skill-owner", "password": "password"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {owner_token}"}
+            resolved = client.get("/api/auth/users/resolve", params={"username": "skill-user"}, headers=headers)
+            self.assertEqual(resolved.status_code, 200)
+            self.assertEqual(resolved.json()["id"], recipient.id)
+            response = client.put(
+                "/api/resource-instances/by-external/grants",
+                headers=headers,
+                json={"resource_id": resource.id, "external_id": "customer-summary", "grants": [{"user_id": recipient.id, "permission_codes": [permission.code]}]},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["items"][0]["user"]["username"], "skill-user")
+            recipient_token = client.post("/api/auth/login", json={"username": "skill-user", "password": "password"}).json()["access_token"]
+            denied = client.get(
+                "/api/resource-instances/by-external/grants",
+                params={"resource_id": resource.id, "external_id": "customer-summary"},
+                headers={"Authorization": f"Bearer {recipient_token}"},
+            )
+            self.assertEqual(denied.status_code, 403)
+            result = client.post("/api/auth/check-resource", headers={"Authorization": f"Bearer {recipient_token}"}, json={"permission": permission.code, "resource_id": resource.id, "external_id": "customer-summary"}).json()
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["matched_by"], "resource_grant")
+
     def test_sqlalchemy_outbox_decorator_is_transactional_and_dispatches_idempotently(self):
         from sqlalchemy import create_engine, select
         from sqlalchemy.orm import Session

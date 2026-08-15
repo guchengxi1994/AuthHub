@@ -102,6 +102,8 @@ docker compose up --build
 - `POST /api/resources`、`DELETE /api/resources/{resource_id}`：管理模块下的资源定义
 - `POST /api/resource-instances`、`DELETE /api/resource-instances?resource_id=...&external_id=...`：业务服务幂等登记/注销记录的外部 ID、用户归属和组织归属
 - `GET`、`PUT /api/resource-instances/{instance_id}/grants`：系统管理员查看或替换一个资源实例的协作者操作权限
+- `GET`、`PUT /api/resource-instances/by-external/grants`：资源 owner 或系统管理员按 `resource_id + external_id` 查看或替换该实例授权，不暴露内部实例 ID
+- `GET /api/auth/users/resolve?username=...`：已登录用户按精确用户名解析一个可授权对象；不提供可枚举的用户目录
 - `POST /api/permissions`：创建资源操作权限，并可同时授予角色
 
 鉴权失败统一返回 `code`，包括 `UNAUTHENTICATED`、`TOKEN_INVALID`、`USER_DISABLED`、`PERMISSION_DENIED` 等。
@@ -138,7 +140,7 @@ hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log
 
 权限范围可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先检查角色权限，再检查此实例归属。系统超级管理员对已存在的资源实例始终允许操作。业务数据库仍是订单、文档等字段的唯一真相源。
 
-对于临时协作、某个 MCP Server 的维护人或单条记录的例外访问，系统管理员可以在管理端“资源实例 -> 协作授权”中为指定用户授予该实例所属资源的具体操作权限。这个授权只对一个 `resource_id + external_id` 生效，不会修改用户角色，也不会扩展到同类型的其他记录；在 `check-resource` 中命中时结果为 `matched_by: "resource_grant"`。角色仍是默认的批量授权方式，实例授权只用于明确的记录级例外。
+对于临时协作、某个 MCP Server 的维护人或单条记录的例外访问，系统管理员可以在管理端“资源实例 -> 协作授权”中为指定用户授予该实例所属资源的具体操作权限。业务系统也可以基于 `by-external/grants` 让该记录的 owner 管理自身记录的协作者，例如让 Skill 创建者授予同事该 Skill 的执行权。这个授权只对一个 `resource_id + external_id` 生效，不会修改用户角色，也不会扩展到同类型的其他记录；在 `check-resource` 中命中时结果为 `matched_by: "resource_grant"`。角色仍是默认的批量授权方式，实例授权只用于明确的记录级例外。
 
 业务服务在自身事务成功后幂等调用“登记/更新归属”；删除业务记录后幂等调用“注销”。这是一致性索引，不是业务数据副本：短暂同步失败应由业务服务通过 outbox、重试队列或定期对账补偿，不能由 AuthHub 反向修改业务表。`auth-hub-client[sqlalchemy]` 已提供事务型 Outbox、提交后投递和重试能力，业务服务只需将其 `auth_hub_outbox` 表纳入自己的迁移。为防止丢失仍在使用的归属索引，资源定义或模块在存在资源实例时会拒绝删除。
 
