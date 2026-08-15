@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from datetime import timedelta
 from unittest.mock import patch
@@ -113,6 +114,29 @@ class ClientSdkTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"version": "2.3.4", "build": "test-build"})
+
+    def test_runtime_settings_prefer_process_environment_over_dotenv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dotenv_path = os.path.join(directory, ".env")
+            with open(dotenv_path, "w", encoding="utf-8") as dotenv:
+                dotenv.write("AUTH_HUB_DATABASE=sqlite+pysqlite:///from-dotenv.db\n")
+                dotenv.write("AUTH_HUB_ADMIN_USERNAME=dotenv-admin\n")
+                dotenv.write("MCP_MANAGER_AUTH_HUB_REGISTRATION_KEY=dotenv-registration-key\n")
+
+            environment = {
+                "AUTH_HUB_DATABASE": f"sqlite+pysqlite:///{os.path.join(directory, 'from-environment.db')}",
+                "AUTH_HUB_ADMIN_USERNAME": "environment-admin",
+                "AUTH_HUB_MODULE_REGISTRATION_KEY": "environment-registration-key",
+                "AUTH_HUB_REDIS_URL": "",
+            }
+            with patch.dict(os.environ, environment, clear=False):
+                from auth_hub.main import RuntimeSettings
+
+                settings = RuntimeSettings(_env_file=dotenv_path)
+
+            self.assertEqual(settings.database, environment["AUTH_HUB_DATABASE"])
+            self.assertEqual(settings.admin_username, "environment-admin")
+            self.assertEqual(settings.module_registration_key, "environment-registration-key")
 
     def test_builtin_management_endpoints_use_assignable_permissions(self):
         from auth_hub.api import create_app

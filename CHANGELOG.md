@@ -14,6 +14,7 @@ All notable changes to AuthHub are documented in this file.
 - Protect AuthHub management APIs with the corresponding `authhub:<resource-type>:<resource-key>:<action>` permission instead of requiring every caller to be a system super administrator.
 - Require `authhub:custom:share-recipient:read` to resolve a username for resource sharing. The endpoint remains exact-match only and does not provide a browsable directory.
 - Hide unavailable management pages and actions in the bundled admin console using the authenticated permission snapshot.
+- Load runtime settings through `pydantic-settings`; process environment variables take precedence over the local `.env` file.
 
 ### Security
 

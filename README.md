@@ -81,6 +81,8 @@ pip install 'auth-hub-client @ file:///path/to/auth-hub/sdk[fastapi]'
 
 默认初始化一个系统级 `admin` 用户，开发密码由 `AuthHubSettings(admin_password=...)` 指定；缺少 Redis 时使用内存缓存。生产环境可传入宿主已有 SQLAlchemy Engine，或通过环境变量直接使用其 PostgreSQL/MySQL URL。
 
+运行时配置由 `pydantic-settings` 读取：进程环境变量优先，只有缺失的值才会从启动工作目录的 `.env` 文件读取。不会扫描父目录或根据源文件路径猜测 `.env`，以避免部署环境被意外覆盖。
+
 ## Docker Compose
 
 ```bash
