@@ -34,34 +34,34 @@ class ClientSdkTests(unittest.TestCase):
             headers={},
         )
 
-    def test_manifest_uses_business_declared_mcp_tool_and_stable_code(self):
+    def test_manifest_uses_business_declared_custom_resource_and_stable_code(self):
         manifest = ModuleManifest(
             module_id="knowledge",
             name="Knowledge service",
-            resources=[ResourceSpec.mcp_tool("search", "Knowledge search")],
+            resources=[ResourceSpec.custom("search", "Knowledge search")],
             permissions=[PermissionSpec("execute", "Run search", resource="search")],
         )
         payload = manifest.to_payload()
-        self.assertEqual(payload["resources"][0]["resource_type"], "mcp_tool")
+        self.assertEqual(payload["resources"][0]["resource_type"], "custom")
         self.assertEqual(payload["resources"][0]["resource_key"], "search")
-        self.assertEqual(manifest.permission_code("search", "execute"), "knowledge:mcp_tool:search:execute")
-        self.assertEqual(manifest.resource_id("search"), "knowledge:mcp_tool:search")
-        self.assertEqual(payload["resources"][0]["id"], "knowledge:mcp_tool:search")
-        self.assertEqual(payload["permissions"][0]["resource_id"], "knowledge:mcp_tool:search")
+        self.assertEqual(manifest.permission_code("search", "execute"), "knowledge:custom:search:execute")
+        self.assertEqual(manifest.resource_id("search"), "knowledge:custom:search")
+        self.assertEqual(payload["resources"][0]["id"], "knowledge:custom:search")
+        self.assertEqual(payload["permissions"][0]["resource_id"], "knowledge:custom:search")
 
     def test_manifest_registration_resolves_resources_and_permissions(self):
         hub = AuthHub.in_memory()
         manifest = ModuleManifest(
             module_id="knowledge",
             name="Knowledge service",
-            resources=[ResourceSpec.mcp_tool("search", "Knowledge search")],
+            resources=[ResourceSpec.custom("search", "Knowledge search")],
             permissions=[PermissionSpec("execute", "Run search", resource="search")],
         )
         module = hub.register_module(**manifest.to_payload())
-        permission = hub.repository.get_permission("knowledge:mcp_tool:search:execute")
+        permission = hub.repository.get_permission("knowledge:custom:search:execute")
         self.assertEqual(module.id, "knowledge")
         self.assertIsNotNone(permission)
-        self.assertEqual(permission.metadata["resource_type"], "mcp_tool")
+        self.assertEqual(permission.metadata["resource_type"], "custom")
         self.assertEqual(permission.metadata["resource_key"], "search")
         self.assertTrue(permission.metadata["resource_id"])
 
@@ -255,7 +255,7 @@ class ClientSdkTests(unittest.TestCase):
 
         hub = AuthHub.in_memory()
         module = hub.register_module("skills", "Skills")
-        resource = hub.create_resource(module.id, "custom", "skill", "MCP Skill")
+        resource = hub.create_resource(module.id, "custom", "skill", "Skill")
         permission = hub.create_permission(None, "Execute Skill", module_id=module.id, resource_id=resource.id, action="execute", scope="owner")
         owner = hub.create_user("skill-owner", "password")
         recipient = hub.create_user("skill-user", "password")

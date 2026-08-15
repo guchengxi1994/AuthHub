@@ -311,25 +311,25 @@ class FrameworkTests(unittest.TestCase):
 
     def test_module_reregistration_removes_stale_permissions(self):
         hub = AuthHub.in_memory()
-        hub.register_module("mcp", "MCP", permissions=[{"id": "mcp:tool:run"}, {"id": "mcp:tool:delete"}])
-        hub.register_module("mcp", "MCP", permissions=[{"id": "mcp:tool:run"}])
-        self.assertIsNone(hub.repository.get_permission("mcp:tool:delete"))
+        hub.register_module("catalog", "Catalog", permissions=[{"id": "catalog:tool:run"}, {"id": "catalog:tool:delete"}])
+        hub.register_module("catalog", "Catalog", permissions=[{"id": "catalog:tool:run"}])
+        self.assertIsNone(hub.repository.get_permission("catalog:tool:delete"))
 
     def test_module_resources_are_synchronized_and_removed(self):
         hub = AuthHub.in_memory()
-        hub.register_module("mcp", "MCP", resources=[
-            {"resource_type": "mcp_server", "resource_key": "server-a", "name": "Server A"},
-            {"resource_type": "mcp_tool", "resource_key": "tool-a", "name": "Tool A"},
+        hub.register_module("catalog", "Catalog", resources=[
+            {"resource_type": "custom", "resource_key": "server-a", "name": "Server A"},
+            {"resource_type": "custom", "resource_key": "tool-a", "name": "Tool A"},
         ])
-        self.assertEqual(len(hub.list_resources("mcp")), 2)
-        hub.register_module("mcp", "MCP", resources=[
-            {"resource_type": "mcp_server", "resource_key": "server-a", "name": "Renamed server"},
+        self.assertEqual(len(hub.list_resources("catalog")), 2)
+        hub.register_module("catalog", "Catalog", resources=[
+            {"resource_type": "custom", "resource_key": "server-a", "name": "Renamed server"},
         ])
-        resources = hub.list_resources("mcp")
+        resources = hub.list_resources("catalog")
         self.assertEqual(len(resources), 1)
         self.assertEqual(resources[0].name, "Renamed server")
-        hub.delete_module("mcp")
-        self.assertEqual(hub.list_resources("mcp"), [])
+        hub.delete_module("catalog")
+        self.assertEqual(hub.list_resources("catalog"), [])
 
     def test_last_system_admin_cannot_be_disabled(self):
         hub = AuthHub.in_memory()

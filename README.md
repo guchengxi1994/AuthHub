@@ -27,17 +27,17 @@ AuthHub 按三类权限组织授权，而不是把所有资源实例混为同一
 
 ```text
 AuthHub 管理权限：管理 AuthHub 本身
-业务系统操作权限：调用接口、页面、按钮或 MCP 能力
+业务系统操作权限：调用接口、页面、按钮或业务能力
 业务系统数据权限：访问某类业务数据及其具体记录
 ```
 
-- **业务模块**：上游业务的边界，例如“订单中心”或“MCP 管理”。一个模块可以同时声明操作资源和数据资源。
+- **业务模块**：上游业务的边界，例如“订单中心”或“知识库”。一个模块可以同时声明操作资源和数据资源。
 - **角色**：权限集合；用户通过一个或多个角色取得权限，多个角色的有效权限取并集。用户也可关联一个或多个组织，用于数据范围判断。
 - **权限资源**：权限对应的受控对象。资源类型和所属模块确定权限类别，服务端不会信任仅由管理台传入的类别。
 
 ### 业务系统操作权限
 
-`api`、`mcp_server`、`mcp_tool`、`page`、`ui_action` 和 `ui_component` 都属于业务系统操作权限。例如调用一个 API、显示页面、执行按钮命令或调用 MCP Tool。
+`api`、`page`、`ui_action` 和 `ui_component` 都属于业务系统操作权限。例如调用一个 API、显示页面或执行按钮命令。
 
 这类权限只能使用 `global` 范围：角色决定用户是否可以执行该能力。前端的页面和按钮控制只能改善体验，业务后端仍必须使用 SDK 进行操作权限校验。
 
@@ -59,11 +59,11 @@ AuthHub 自身的管理 API 也受 RBAC 保护。启动时会幂等注册内置 
 
 ## 业务系统接入
 
-AuthHub 不会内置或调用你的 MCP Server、MCP Tool、订单 API 或前端页面；`mcp_tool` 等只是资源分类。实际资源由你的业务后端通过 `auth-hub-client` 声明和同步，例如 `knowledge` 模块下的 `search` MCP Tool，或 `orders` 模块下的 `/orders` API。
+AuthHub 不会内置或调用你的业务服务、订单 API 或前端页面。具体业务对象和外部集成由业务后端自行管理；需要由 AuthHub 记录授权范围的业务对象应通过 `entity` 或 `custom` 声明。
 
 ```text
 浏览器 -> 业务后端 -> auth-hub-client -> AuthHub 鉴权
-                    -> 通过后才执行业务 API / MCP Tool
+                    -> 通过后才执行业务 API
 ```
 
 业务服务启动时用 `AUTH_HUB_MODULE_REGISTRATION_KEY` 同步模块清单；浏览器请求仍携带用户的 AuthHub Bearer Token 到业务后端。业务后端以 SDK/依赖项校验权限，前端不持有注册密钥，也不直接调用模块注册接口。业务后端还可以暴露一个 `/api/session/permissions` 代理端点，供 `@auth-hub/react` 在登录后一次性加载权限快照。完整 FastAPI 示例见 [sdk/README.md](sdk/README.md)。

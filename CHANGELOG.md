@@ -18,7 +18,7 @@ All notable changes to AuthHub are documented in this file.
 
 ### Migration
 
-- Resource instances previously used for API, MCP, page, or UI-operation resources are no longer valid for new record-level authorization. Model the shareable object as an `entity` or `custom` business data resource and register its records through the SDK outbox.
+- Resource instances previously used for API, page, or UI-operation resources are no longer valid for new record-level authorization. Model the shareable object as an `entity` or `custom` business data resource and register its records through the SDK outbox.
 
 ## [0.3.1] - 2026-08-15
 

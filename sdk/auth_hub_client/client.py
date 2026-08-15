@@ -12,6 +12,8 @@ _UNSET = object()
 PERMISSION_CATEGORY_AUTHHUB_ADMIN = "authhub_admin"
 PERMISSION_CATEGORY_BUSINESS_OPERATION = "business_operation"
 PERMISSION_CATEGORY_BUSINESS_DATA = "business_data"
+# Business modules should use ResourceSpec.custom(...) for owned domain records.
+# A module can use global scope when a custom capability is shared by all users.
 BUSINESS_DATA_RESOURCE_TYPES = frozenset({"entity", "custom"})
 RESOURCE_SCOPES = frozenset({"global", "owner", "organization"})
 
@@ -47,10 +49,6 @@ class ResourceSpec:
     def api(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "api", **kwargs)
     @classmethod
     def entity(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "entity", **kwargs)
-    @classmethod
-    def mcp_server(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "mcp_server", **kwargs)
-    @classmethod
-    def mcp_tool(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "mcp_tool", **kwargs)
     @classmethod
     def page(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "page", **kwargs)
     @classmethod

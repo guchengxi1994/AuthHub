@@ -1,6 +1,6 @@
 # auth-hub-client
 
-`auth-hub-client` is installed by an upstream **Python backend**. It is not a browser SDK and it does not own the upstream service's database, API routes, or MCP execution.
+`auth-hub-client` is installed by an upstream **Python backend**. It is not a browser SDK and it does not own the upstream service's database, API routes, or external service execution.
 
 ```bash
 pip install 'auth-hub-client @ file:///path/to/auth-hub/sdk[fastapi,sqlalchemy]'
@@ -13,7 +13,7 @@ Browser -> business API -> auth-hub-client -> AuthHub /api/auth/check
                     |                         |
                     | allow / deny            -> RBAC decision
                     v
-              business API / MCP tool
+              business API / external service
 ```
 
 1. The business backend starts and syncs its declared module manifest using a registration key.
@@ -28,7 +28,7 @@ The frontend never calls the module registration endpoint and never receives the
 The manifest derives a category from each resource type. AuthHub uses the same
 rule when it receives the manifest:
 
-- `api`, `mcp_server`, `mcp_tool`, `page`, `ui_action`, and `ui_component`
+- `api`, `page`, `ui_action`, and `ui_component`
   are **business operation permissions**. They protect whether a capability
   may be invoked and must use `scope="global"`.
 - `entity` and `custom` are **business data permissions**. They may use
@@ -54,7 +54,7 @@ manifest = ModuleManifest(
     module_id="knowledge",
     name="知识库服务",
     resources=[
-        ResourceSpec.mcp_tool("search", "知识检索工具"),
+        ResourceSpec.custom("search", "知识检索工具"),
         ResourceSpec.api("/orders", "订单接口"),
         ResourceSpec.entity("order", "订单"),
         ResourceSpec.page("document-list", "文档列表页面"),
@@ -88,7 +88,7 @@ async def search(_: dict = Depends(require_permission(
     client,
     manifest.permission_code("search", "execute"),
 ))):
-    return {"result": "call the real MCP tool here"}
+    return {"result": "call the real external service here"}
 ```
 
 For record-level authorization, register a business data record after creation and check the external business ID before read/update/delete:
@@ -229,7 +229,7 @@ async def update_order(
     return {"id": order_id}
 ```
 
-`ResourceSpec.mcp_tool("search", ...)` means the upstream service's own tool named `search` is a protected object. It does **not** mean AuthHub contains a built-in search tool.
+`ResourceSpec.custom("search", ...)` declares a business-owned object. AuthHub records only its authorization metadata; it does not implement or invoke the underlying service.
 
 ## Resource Types
 
@@ -237,14 +237,12 @@ The type is a stable authorization classification, not a hardcoded business reso
 
 - `api`: an endpoint, such as `/documents`.
 - `entity`: a business collection, such as `order`; this is a business data resource.
-- `mcp_server`: an upstream MCP server identifier.
-- `mcp_tool`: an upstream tool identifier.
 - `page`: a menu/page visibility identifier.
 - `ui_action`: a button, context-menu command, or batch operation.
 - `ui_component`: a Tab, region, or other conditionally rendered UI component.
 - `custom`: a domain-specific business data object.
 
-`api`, MCP, page, and UI types are business operation resources. Only `entity` and `custom` resources can be registered as business data records. Choose the type that matches the thing being protected; the actual names and keys always come from the business service's manifest.
+`api`, page, and UI types are business operation resources. Only `entity` and `custom` resources can be registered as business data records. Choose the type that matches the thing being protected; the actual names and keys always come from the business service's manifest.
 
 ## Permission Snapshot Proxy For React
 
@@ -259,7 +257,7 @@ app = FastAPI()
 
 @app.get("/api/session/permissions")
 async def session_permissions(snapshot: dict = Depends(auth.permission_snapshot())):
-    return snapshot  # {"permissions": ["knowledge:mcp_tool:search:execute", ...]}
+    return snapshot  # {"permissions": ["knowledge:custom:search:execute", ...]}
 ```
 
 The React app calls this endpoint once after login. If the business app stores its own session cookie, the endpoint may translate that session into the AuthHub access token before calling `permission_snapshot`; the SDK itself does not manage browser cookies or tokens.

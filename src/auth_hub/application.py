@@ -13,12 +13,10 @@ from .ports.repositories import AuthHubRepository
 from .ports.services import AuditLog, Cache, PasswordHasher, TokenService
 
 _UNSET = object()
-RESOURCE_TYPES = frozenset({"api", "entity", "mcp_server", "mcp_tool", "page", "ui_action", "ui_component", "custom"})
+RESOURCE_TYPES = frozenset({"api", "entity", "page", "ui_action", "ui_component", "custom"})
 RESOURCE_ACTIONS = {
     "api": frozenset({"read", "create", "update", "delete", "execute", "manage"}),
     "entity": frozenset({"view", "read", "create", "update", "delete", "manage"}),
-    "mcp_server": frozenset({"view", "read", "create", "update", "delete", "manage"}),
-    "mcp_tool": frozenset({"view", "execute", "manage"}),
     "page": frozenset({"view", "manage"}),
     "ui_action": frozenset({"execute", "manage"}),
     "ui_component": frozenset({"view", "manage"}),
@@ -33,9 +31,8 @@ PERMISSION_CATEGORIES = frozenset({
     PERMISSION_CATEGORY_BUSINESS_OPERATION,
     PERMISSION_CATEGORY_BUSINESS_DATA,
 })
-# Entity and custom resources represent business objects.  All other resource
-# types protect the ability to invoke a business capability and are therefore
-# global operation permissions, not per-record data permissions.
+# Only generic entity/custom resources are business data in AuthHub itself.
+# Business modules declare their owned domain records with ``custom``.
 DATA_RESOURCE_TYPES = frozenset({"entity", "custom"})
 
 # AuthHub's management APIs are resources too.  Keeping their declaration in
@@ -63,7 +60,7 @@ def permission_category_for_resource(module_id: Optional[str], resource_type: Op
     The category is an authorization contract rather than a user-editable
     property: AuthHub's own module is always management RBAC, entity/custom
     resources are business data, and all remaining business resources protect
-    an operation such as an endpoint, page, or MCP capability.
+    an operation such as an endpoint, page, or UI capability.
     """
     if module_id == AUTHHUB_SYSTEM_MODULE_ID:
         return PERMISSION_CATEGORY_AUTHHUB_ADMIN
