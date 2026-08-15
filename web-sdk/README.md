@@ -99,9 +99,9 @@ function Navigation() {
 </Permission>
 ```
 
-## Resource Instances
+## Business Data Records
 
-The permission snapshot is correct for routes, menus, and ordinary actions. A concrete business record, MCP Server, or MCP Tool can additionally have an owner, an organization scope, or an administrator-managed collaboration grant. Render these elements after the business backend checks that exact record.
+The permission snapshot is correct for routes, menus, and ordinary actions. A concrete business data record can additionally have an owner, an organization scope, or an administrator-managed sharing grant. Render these elements after the business backend checks that exact record. API, page, button, and MCP operation permissions remain global capability checks.
 
 The browser still does not call AuthHub directly. Expose a protected business endpoint that forwards to `check_resource_or_raise()` or returns its AuthHub decision, then provide that function to the lightweight resource provider:
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "auth-hub"
-version = "0.3.1"
+version = "0.4.0"
 description = "Embeddable authentication and RBAC authorization framework."
 readme = "README.md"
 requires-python = ">=3.9"

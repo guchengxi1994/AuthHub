@@ -190,7 +190,7 @@ export interface ResourcePermissionState {
   refresh: () => Promise<void>;
 }
 
-/** Resolve a record-level decision for an API, entity, MCP Server, or MCP Tool. */
+/** Resolve a record-level decision for one registered business data record. */
 export function useResourcePermission(request: ResourcePermissionRequest, checker?: ResourcePermissionChecker): ResourcePermissionState {
   const cache = useContext(ResourcePermissionContext);
   if (!checker && !cache) throw new Error("useResourcePermission requires ResourcePermissionProvider or a checker");
@@ -283,7 +283,7 @@ export interface ResourcePermissionProps {
   errorFallback?: (error: Error, refresh: () => Promise<void>) => ReactNode;
 }
 
-/** Render only after a resource-instance decision has been obtained. */
+/** Render only after a business-data record decision has been obtained. */
 export function ResourcePermission({ request, checker, children, fallback = null, loadingFallback = null, errorFallback }: ResourcePermissionProps): ReactNode {
   const state = useResourcePermission(request, checker);
   if (state.loading) return loadingFallback;
@@ -295,7 +295,7 @@ export interface ResourcePermissionRouteProps extends ResourcePermissionProps {
   forbidden?: ReactNode;
 }
 
-/** Router-agnostic guard for a route whose target is one concrete resource instance. */
+/** Router-agnostic guard for a route whose target is one concrete business data record. */
 export function ResourcePermissionRoute({ request, checker, children, fallback, forbidden, loadingFallback, errorFallback }: ResourcePermissionRouteProps): ReactNode {
   return <ResourcePermission request={request} checker={checker} fallback={forbidden ?? fallback} loadingFallback={loadingFallback} errorFallback={errorFallback}>{children}</ResourcePermission>;
 }

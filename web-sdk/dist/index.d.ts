@@ -59,7 +59,7 @@ interface ResourcePermissionState {
     result: ResourcePermissionResult | null;
     refresh: () => Promise<void>;
 }
-/** Resolve a record-level decision for an API, entity, MCP Server, or MCP Tool. */
+/** Resolve a record-level decision for one registered business data record. */
 declare function useResourcePermission(request: ResourcePermissionRequest, checker?: ResourcePermissionChecker): ResourcePermissionState;
 interface PermissionProps {
     permission: PermissionInput;
@@ -88,12 +88,12 @@ interface ResourcePermissionProps {
     loadingFallback?: ReactNode;
     errorFallback?: (error: Error, refresh: () => Promise<void>) => ReactNode;
 }
-/** Render only after a resource-instance decision has been obtained. */
+/** Render only after a business-data record decision has been obtained. */
 declare function ResourcePermission({ request, checker, children, fallback, loadingFallback, errorFallback }: ResourcePermissionProps): ReactNode;
 interface ResourcePermissionRouteProps extends ResourcePermissionProps {
     forbidden?: ReactNode;
 }
-/** Router-agnostic guard for a route whose target is one concrete resource instance. */
+/** Router-agnostic guard for a route whose target is one concrete business data record. */
 declare function ResourcePermissionRoute({ request, checker, children, fallback, forbidden, loadingFallback, errorFallback }: ResourcePermissionRouteProps): ReactNode;
 declare function filterByPermission<T>(items: readonly T[], permissionOf: (item: T) => PermissionInput | undefined, state: Pick<PermissionState, "hasAllPermissions">): T[];
 

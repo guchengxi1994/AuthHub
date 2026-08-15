@@ -2,6 +2,24 @@
 
 All notable changes to AuthHub are documented in this file.
 
+## [0.4.0] - 2026-08-15
+
+### Added
+
+- Classify every permission as AuthHub management, business operation, or business data without requiring a database schema migration; expose the derived category and record-tracking capability through the resource and permission APIs.
+- Expose matching permission-category helpers in the Python client SDK and validate manifests before registration.
+
+### Changed
+
+- Restrict `owner` and `organization` scopes, data-record registration, record-level authorization, and per-record sharing to `entity` and `custom` business data resources.
+- Reorganize the management console around the three permission categories. Operation resources now show global-only scope, while data records and record sharing are presented as one workflow.
+- Rename the management-console resource views to clarify the distinction between business resources and registered data records.
+- Document that a data-changing business route can require both a business operation permission and a record-level business data permission.
+
+### Migration
+
+- Resource instances previously used for API, MCP, page, or UI-operation resources are no longer valid for new record-level authorization. Model the shareable object as an `entity` or `custom` business data resource and register its records through the SDK outbox.
+
 ## [0.3.1] - 2026-08-15
 
 ### Changed

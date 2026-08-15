@@ -29,7 +29,7 @@ class AuthHubFastAPI:
         return dependency
 
     def require_resource(self, permission: str, resource_id: str, external_id_parameter: str, *, context: Optional[Mapping[str, Any]] = None) -> Callable[..., Mapping[str, Any]]:
-        """Authorize a business record using a FastAPI route path parameter.
+        """Authorize a business-data record using a FastAPI route path parameter.
 
         ``external_id_parameter`` must be a named parameter on the route, for
         example ``order_id`` for ``/orders/{order_id}``.

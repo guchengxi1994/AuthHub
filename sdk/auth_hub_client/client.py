@@ -9,6 +9,18 @@ from urllib.request import Request, urlopen
 
 
 _UNSET = object()
+PERMISSION_CATEGORY_AUTHHUB_ADMIN = "authhub_admin"
+PERMISSION_CATEGORY_BUSINESS_OPERATION = "business_operation"
+PERMISSION_CATEGORY_BUSINESS_DATA = "business_data"
+BUSINESS_DATA_RESOURCE_TYPES = frozenset({"entity", "custom"})
+RESOURCE_SCOPES = frozenset({"global", "owner", "organization"})
+
+
+def resource_permission_category(resource_type: str, *, module_id: Optional[str] = None) -> str:
+    """Return the authorization category implied by a manifest resource."""
+    if module_id == "authhub":
+        return PERMISSION_CATEGORY_AUTHHUB_ADMIN
+    return PERMISSION_CATEGORY_BUSINESS_DATA if resource_type in BUSINESS_DATA_RESOURCE_TYPES else PERMISSION_CATEGORY_BUSINESS_OPERATION
 
 
 class AuthHubClientError(RuntimeError):
@@ -48,8 +60,12 @@ class ResourceSpec:
     @classmethod
     def custom(cls, key: str, name: str, **kwargs: Any) -> "ResourceSpec": return cls(key, name, "custom", **kwargs)
 
+    @property
+    def permission_category(self) -> str:
+        return resource_permission_category(self.resource_type)
+
     def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {"resource_type": self.resource_type, "resource_key": self.key, "name": self.name}
+        result: Dict[str, Any] = {"resource_type": self.resource_type, "resource_key": self.key, "name": self.name, "permission_category": self.permission_category}
         if self.id: result["id"] = self.id
         if self.metadata: result["metadata"] = dict(self.metadata)
         return result
@@ -77,7 +93,10 @@ class PermissionSpec:
     def to_dict(self, resources: Mapping[str, ResourceSpec]) -> Dict[str, Any]:
         resource = resources.get(self.resource)
         if not resource: raise ValueError(f"permission references unknown resource: {self.resource}")
-        result: Dict[str, Any] = {"id": self.id or self.code or "", "name": self.name, "resource_id": resource.id or "", "resource_type": resource.resource_type, "resource_key": resource.key, "action": self.action, "scope": self.scope}
+        if self.scope not in RESOURCE_SCOPES: raise ValueError(f"unsupported permission scope: {self.scope}")
+        if self.scope != "global" and resource.permission_category != PERMISSION_CATEGORY_BUSINESS_DATA:
+            raise ValueError("owner or organization scope is only supported for business data resources")
+        result: Dict[str, Any] = {"id": self.id or self.code or "", "name": self.name, "resource_id": resource.id or "", "resource_type": resource.resource_type, "resource_key": resource.key, "action": self.action, "scope": self.scope, "permission_category": resource.permission_category}
         if self.description: result["description"] = self.description
         return result
 
@@ -99,7 +118,7 @@ class ModuleManifest:
         return permission.resolved_code(self.module_id, resources)
 
     def resource_id(self, resource_key: str) -> str:
-        """Return the stable resource ID used by object-level checks."""
+        """Return the stable resource ID used by business-data record checks."""
         if not self.module_id: raise ValueError("module_id is required to derive a stable resource ID")
         resource = next((item for item in self.resources if item.key == resource_key), None)
         if not resource: raise ValueError(f"unknown resource: {resource_key}")
@@ -163,6 +182,7 @@ class AuthHubClient:
         return result
 
     def check_resource(self, access_token: str, permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
+        """Check one registered business data record."""
         payload: Dict[str, Any] = {"permission": permission, "resource_id": resource_id, "external_id": external_id}
         if context is not None: payload["context"] = dict(context)
         return self._request("POST", "/api/auth/check-resource", payload, headers={"Authorization": f"Bearer {access_token}"})
@@ -187,6 +207,7 @@ class AuthHubClient:
         return self._request("GET", "/api/auth/user-permissions", headers={"Authorization": f"Bearer {access_token}"})
 
     def register_resource_instance(self, resource_id: str, external_id: str, *, owner_user_id: Any = _UNSET, organization_id: Any = _UNSET, metadata: Any = _UNSET) -> Mapping[str, Any]:
+        """Register ownership metadata for one business data record."""
         payload: Dict[str, Any] = {"resource_id": resource_id, "external_id": external_id}
         if owner_user_id is not _UNSET: payload["owner_user_id"] = owner_user_id
         if organization_id is not _UNSET: payload["organization_id"] = organization_id

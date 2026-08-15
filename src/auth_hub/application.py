@@ -25,6 +25,18 @@ RESOURCE_ACTIONS = {
     "custom": frozenset({"view", "read", "create", "update", "delete", "execute", "manage"}),
 }
 RESOURCE_SCOPES = frozenset({"global", "owner", "organization"})
+PERMISSION_CATEGORY_AUTHHUB_ADMIN = "authhub_admin"
+PERMISSION_CATEGORY_BUSINESS_OPERATION = "business_operation"
+PERMISSION_CATEGORY_BUSINESS_DATA = "business_data"
+PERMISSION_CATEGORIES = frozenset({
+    PERMISSION_CATEGORY_AUTHHUB_ADMIN,
+    PERMISSION_CATEGORY_BUSINESS_OPERATION,
+    PERMISSION_CATEGORY_BUSINESS_DATA,
+})
+# Entity and custom resources represent business objects.  All other resource
+# types protect the ability to invoke a business capability and are therefore
+# global operation permissions, not per-record data permissions.
+DATA_RESOURCE_TYPES = frozenset({"entity", "custom"})
 
 # AuthHub's management APIs are resources too.  Keeping their declaration in
 # the framework means installations upgrade to granular management RBAC during
@@ -45,6 +57,28 @@ AUTHHUB_SYSTEM_RESOURCES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
 )
 
 
+def permission_category_for_resource(module_id: Optional[str], resource_type: Optional[str]) -> str:
+    """Derive a stable permission category without a schema migration.
+
+    The category is an authorization contract rather than a user-editable
+    property: AuthHub's own module is always management RBAC, entity/custom
+    resources are business data, and all remaining business resources protect
+    an operation such as an endpoint, page, or MCP capability.
+    """
+    if module_id == AUTHHUB_SYSTEM_MODULE_ID:
+        return PERMISSION_CATEGORY_AUTHHUB_ADMIN
+    if resource_type in DATA_RESOURCE_TYPES:
+        return PERMISSION_CATEGORY_BUSINESS_DATA
+    return PERMISSION_CATEGORY_BUSINESS_OPERATION
+
+
+def _permission_category(permission: Permission) -> str:
+    category = str(permission.metadata.get("permission_category") or "")
+    if category in PERMISSION_CATEGORIES:
+        return category
+    return permission_category_for_resource(permission.module_id, permission.metadata.get("resource_type"))
+
+
 def authhub_system_permission(resource_type: str, resource_key: str, action: str) -> str:
     return f"{AUTHHUB_SYSTEM_MODULE_ID}:{resource_type}:{resource_key}:{action}"
 
@@ -54,7 +88,7 @@ def _authhub_system_manifest() -> tuple[list[Mapping[str, Any]], list[Mapping[st
     permissions: list[Mapping[str, Any]] = []
     for resource_type, resource_key, name, actions in AUTHHUB_SYSTEM_RESOURCES:
         resource_id = f"{AUTHHUB_SYSTEM_MODULE_ID}:{resource_type}:{resource_key}"
-        resources.append({"id": resource_id, "resource_type": resource_type, "resource_key": resource_key, "name": name, "metadata": {"built_in": True}})
+        resources.append({"id": resource_id, "resource_type": resource_type, "resource_key": resource_key, "name": name, "metadata": {"built_in": True, "permission_category": PERMISSION_CATEGORY_AUTHHUB_ADMIN}})
         for action in actions:
             permissions.append({
                 "id": authhub_system_permission(resource_type, resource_key, action),
@@ -64,6 +98,7 @@ def _authhub_system_manifest() -> tuple[list[Mapping[str, Any]], list[Mapping[st
                 "resource_key": resource_key,
                 "action": action,
                 "scope": "global",
+                "permission_category": PERMISSION_CATEGORY_AUTHHUB_ADMIN,
             })
     return resources, permissions
 
@@ -299,9 +334,12 @@ class AuthHub:
             if resource.module_id != module_id: raise ValidationError("resource must belong to the selected module")
             if not action: raise ValidationError("resource permissions require an action")
             if action not in RESOURCE_ACTIONS[resource.resource_type]: raise ValidationError("action is not supported by this resource type")
+            category = permission_category_for_resource(resource.module_id, resource.resource_type)
+            if scope != "global" and category != PERMISSION_CATEGORY_BUSINESS_DATA:
+                raise ValidationError("owner or organization scope is only supported for business data permissions")
             code = code or f"{module_id}:{resource.resource_type}:{resource.resource_key}:{action}"
             kind = "api" if resource.resource_type == "api" else "resource"
-            permission_metadata.update({"resource_id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "action": action, "scope": scope})
+            permission_metadata.update({"resource_id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "action": action, "scope": scope, "permission_category": category})
         elif scope != "global":
             raise ValidationError("owner or organization scope requires a resource")
         if not code or not name: raise ValidationError("permission code and name are required")
@@ -332,13 +370,17 @@ class AuthHub:
         if not resource_key or not name: raise ValidationError("resource_key and name are required")
         if any(item.resource_type == resource_type and item.resource_key == resource_key for item in self.repository.list_resources(module_id)):
             raise ConflictError("resource already exists in this module")
-        resource = self.repository.save_resource(ResourceDefinition(new_id(), resource_type, resource_key, name, module_id, dict(metadata or {})))
+        resource_metadata = dict(metadata or {})
+        resource_metadata["permission_category"] = permission_category_for_resource(module_id, resource_type)
+        resource = self.repository.save_resource(ResourceDefinition(new_id(), resource_type, resource_key, name, module_id, resource_metadata))
         self._audit("resource.create", actor_id, "resource", resource.id, "success")
         return resource
 
     def register_resource_instance(self, resource_id: str, external_id: str, *, owner_user_id: Any = _UNSET, organization_id: Any = _UNSET, metadata: Any = _UNSET, actor_id: Optional[str] = None) -> ResourceInstance:
         resource = self.repository.get_resource(resource_id)
         if not resource: raise NotFoundError("resource", resource_id)
+        if permission_category_for_resource(resource.module_id, resource.resource_type) != PERMISSION_CATEGORY_BUSINESS_DATA:
+            raise ValidationError("resource instances are only supported for business data resources")
         if not external_id: raise ValidationError("external_id is required")
         existing = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
         resolved_owner = existing.owner_user_id if owner_user_id is _UNSET and existing else (None if owner_user_id is _UNSET else owner_user_id)
@@ -378,6 +420,9 @@ class AuthHub:
         substitute for assigning a global role.
         """
         instance = self.resource_instance(instance_id)
+        resource = self.repository.get_resource(instance.resource_id)
+        if not resource or permission_category_for_resource(resource.module_id, resource.resource_type) != PERMISSION_CATEGORY_BUSINESS_DATA:
+            raise ValidationError("record sharing is only supported for business data resources")
         normalized: set[tuple[str, str]] = set()
         for item in grants:
             if not isinstance(item, Mapping): raise ValidationError("each resource grant must be an object")
@@ -393,6 +438,8 @@ class AuthHub:
                 if not permission or not permission.enabled: raise NotFoundError("permission", permission_code)
                 if permission.metadata.get("resource_id") != instance.resource_id:
                     raise ValidationError("resource grant permission must belong to the resource instance definition")
+                if _permission_category(permission) != PERMISSION_CATEGORY_BUSINESS_DATA:
+                    raise ValidationError("record sharing requires a business data permission")
                 normalized.add((user_id, permission_code))
         stored = self.repository.replace_resource_instance_grants(instance.id, [ResourceInstanceGrant(new_id(), instance.id, user_id, permission_code) for user_id, permission_code in sorted(normalized)])
         for user_id, _ in normalized: self.invalidate_user_permissions(user_id)
@@ -401,9 +448,16 @@ class AuthHub:
 
     def can_access_resource_instance(self, access_token: Optional[str], permission: str, instance_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
         instance = self.resource_instance(instance_id)
+        resource = self.repository.get_resource(instance.resource_id)
+        if not resource or permission_category_for_resource(resource.module_id, resource.resource_type) != PERMISSION_CATEGORY_BUSINESS_DATA:
+            raise ValidationError("record-level authorization is only supported for business data resources")
         return self.check_permission(access_token, permission, resource=instance.external_id, context={"resource_instance_id": instance.id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, **dict(context or {})})
 
     def can_access_resource(self, access_token: Optional[str], permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
+        resource = self.repository.get_resource(resource_id)
+        if not resource: raise NotFoundError("resource", resource_id)
+        if permission_category_for_resource(resource.module_id, resource.resource_type) != PERMISSION_CATEGORY_BUSINESS_DATA:
+            raise ValidationError("record-level authorization is only supported for business data resources")
         instance = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
         if not instance:
             try:
@@ -420,6 +474,10 @@ class AuthHub:
         preflight workflows, such as validating a recipient before a business
         service grants access to a composed asset.
         """
+        resource = self.repository.get_resource(resource_id)
+        if not resource: raise NotFoundError("resource", resource_id)
+        if permission_category_for_resource(resource.module_id, resource.resource_type) != PERMISSION_CATEGORY_BUSINESS_DATA:
+            raise ValidationError("record-level authorization is only supported for business data resources")
         instance = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
         if not instance:
             user = self._user_or_raise(user_id)
@@ -483,7 +541,7 @@ class AuthHub:
             result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
             self._audit("authorization.check", user.id, "permission", permission, "denied", {"resource": resource, "context": dict(context or {})})
             return result
-        if instance and self.repository.has_resource_instance_grant(instance.id, user.id, permission):
+        if instance and _permission_category(known_permission) == PERMISSION_CATEGORY_BUSINESS_DATA and self.repository.has_resource_instance_grant(instance.id, user.id, permission):
             result = AuthorizationResult(True, True, permission, user.id, matched_by="resource_grant")
             self._audit("authorization.check", user.id, "permission", permission, "allowed", {"resource": resource, "context": dict(context or {})})
             return result
@@ -567,6 +625,8 @@ class AuthHub:
         normalized_permissions: List[Mapping[str, Any]] = []
         for item in permissions or []:
             permission = dict(item)
+            scope = str(permission.get("scope") or "global")
+            if scope not in RESOURCE_SCOPES: raise ValidationError("unsupported permission scope")
             resource_id = str(permission.get("resource_id") or "")
             if not resource_id and permission.get("resource_key"):
                 resource_id = resources_by_key.get((str(permission.get("resource_type") or ""), str(permission.get("resource_key")))) or ""
@@ -580,9 +640,12 @@ class AuthHub:
                 if permission.get("resource_type") and permission["resource_type"] != resource_type: raise ValidationError("registered permission resource type does not match")
                 if permission.get("resource_key") and permission["resource_key"] != resource_key: raise ValidationError("registered permission resource key does not match")
                 permission.update({"id": _registered_permission_code(module_id, {**permission, "resource_type": resource_type, "resource_key": resource_key, "action": action}), "resource_id": resource_id, "resource_type": resource_type, "resource_key": resource_key, "action": action})
-                scope = str(permission.get("scope") or "global")
-                if scope not in RESOURCE_SCOPES: raise ValidationError("unsupported permission scope")
-                permission["scope"] = scope
+                category = permission_category_for_resource(module_id, resource_type)
+                if scope != "global" and category != PERMISSION_CATEGORY_BUSINESS_DATA:
+                    raise ValidationError("owner or organization scope is only supported for business data permissions")
+                permission.update({"scope": scope, "permission_category": category})
+            elif str(permission.get("scope") or "global") != "global":
+                raise ValidationError("owner or organization scope requires a resource")
             normalized_permissions.append(permission)
         module = ModuleDefinition(module_id, module_name, description, dict(metadata or {}), normalized_permissions, list(apis or []), resources)
         module = self.repository.save_module(module)
@@ -596,6 +659,7 @@ class AuthHub:
                 kind = "api" if resource_type == "api" else "resource" if resource_id else "operation"
                 metadata = dict(item)
                 metadata["registration_managed"] = True
+                metadata["permission_category"] = permission_category_for_resource(module_id, resource_type)
                 self.repository.save_permission(Permission(new_id(), code, str(item.get("name") or code), module_id=module_id, description=item.get("description"), kind=kind, metadata=metadata))
         if previous:
             old_codes = {_registered_permission_code(module_id, item) for item in previous.permissions}
@@ -606,7 +670,9 @@ class AuthHub:
             resource_type = str(item.get("resource_type") or item.get("type") or "")
             resource_key = str(item.get("resource_key") or item.get("key") or "")
             resource_id = str(item.get("id") or f"{module_id}:{resource_type}:{resource_key}")
-            self.repository.save_resource(ResourceDefinition(resource_id, resource_type, resource_key, str(item.get("name") or resource_key), module_id, dict(item.get("metadata") or item)))
+            resource_metadata = dict(item.get("metadata") or item)
+            resource_metadata["permission_category"] = permission_category_for_resource(module_id, resource_type)
+            self.repository.save_resource(ResourceDefinition(resource_id, resource_type, resource_key, str(item.get("name") or resource_key), module_id, resource_metadata))
         for resource_id in previous_resource_ids - registered_resource_ids: self.repository.delete_resource(resource_id)
         # A newly registered permission may be assigned immediately by an admin;
         # invalidate every currently known user cache because the cache port has
@@ -664,13 +730,15 @@ class AuthHub:
     @staticmethod
     def role_dict(role: Role) -> Dict[str, Any]: return {"id": role.id, "code": role.code, "name": role.name, "description": role.description, "enabled": role.enabled, "built_in": role.built_in}
     @staticmethod
-    def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "scope": permission.metadata.get("scope", "global"), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
+    def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "scope": permission.metadata.get("scope", "global"), "permission_category": _permission_category(permission), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
     @staticmethod
     def resource_instance_dict(instance: ResourceInstance) -> Dict[str, Any]: return {"id": instance.id, "resource_id": instance.resource_id, "external_id": instance.external_id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, "metadata": dict(instance.metadata), "created_at": instance.created_at.isoformat(), "updated_at": instance.updated_at.isoformat()}
     @staticmethod
     def resource_instance_grant_dict(grant: ResourceInstanceGrant) -> Dict[str, Any]: return {"id": grant.id, "resource_instance_id": grant.resource_instance_id, "user_id": grant.user_id, "permission_code": grant.permission_code, "created_at": grant.created_at.isoformat()}
     @staticmethod
-    def resource_dict(resource: ResourceDefinition) -> Dict[str, Any]: return {"id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "name": resource.name, "module_id": resource.module_id, "metadata": dict(resource.metadata)}
+    def resource_dict(resource: ResourceDefinition) -> Dict[str, Any]:
+        category = permission_category_for_resource(resource.module_id, resource.resource_type)
+        return {"id": resource.id, "resource_type": resource.resource_type, "resource_key": resource.resource_key, "name": resource.name, "module_id": resource.module_id, "permission_category": category, "supports_resource_instances": category == PERMISSION_CATEGORY_BUSINESS_DATA, "metadata": dict(resource.metadata)}
     @staticmethod
     def audit_event_dict(event: AuditEvent) -> Dict[str, Any]: return {"id": event.id, "action": event.action, "actor_id": event.actor_id, "target_type": event.target_type, "target_id": event.target_id, "outcome": event.outcome, "occurred_at": event.occurred_at.isoformat(), "metadata": dict(event.metadata)}
     def _user_or_raise(self, user_id: str) -> User:

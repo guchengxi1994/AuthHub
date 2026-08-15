@@ -23,6 +23,25 @@ Browser -> business API -> auth-hub-client -> AuthHub /api/auth/check
 
 The frontend never calls the module registration endpoint and never receives the registration key.
 
+## Permission Categories
+
+The manifest derives a category from each resource type. AuthHub uses the same
+rule when it receives the manifest:
+
+- `api`, `mcp_server`, `mcp_tool`, `page`, `ui_action`, and `ui_component`
+  are **business operation permissions**. They protect whether a capability
+  may be invoked and must use `scope="global"`.
+- `entity` and `custom` are **business data permissions**. They may use
+  `global`, `owner`, or `organization`, can be registered as data records, and
+  support explicit per-record sharing.
+- The framework's own `authhub` module is reserved for **AuthHub management
+  permissions** and cannot be registered by a business service.
+
+The SDK rejects `owner` and `organization` scopes for an operation resource
+before sending the manifest. For a request that changes one data record, use
+both an operation dependency and a record dependency when the service exposes
+both concerns.
+
 ## FastAPI Example
 
 ```python
@@ -36,7 +55,7 @@ manifest = ModuleManifest(
     name="知识库服务",
     resources=[
         ResourceSpec.mcp_tool("search", "知识检索工具"),
-        ResourceSpec.api("/documents", "文档接口"),
+        ResourceSpec.api("/orders", "订单接口"),
         ResourceSpec.entity("order", "订单"),
         ResourceSpec.page("document-list", "文档列表页面"),
         ResourceSpec.ui_action("document-export", "导出文档"),
@@ -44,7 +63,7 @@ manifest = ModuleManifest(
     ],
     permissions=[
         PermissionSpec("execute", "执行知识检索", resource="search"),
-        PermissionSpec("read", "读取文档", resource="/documents", scope="global"),
+        PermissionSpec("update", "调用订单更新接口", resource="/orders"),
         PermissionSpec("update", "更新自己的订单", resource="order", scope="owner"),
         PermissionSpec("view", "查看文档页面", resource="document-list"),
         PermissionSpec("execute", "导出文档", resource="document-export"),
@@ -72,7 +91,7 @@ async def search(_: dict = Depends(require_permission(
     return {"result": "call the real MCP tool here"}
 ```
 
-For record-level authorization, register the business record after creation and check the external business ID before read/update/delete:
+For record-level authorization, register a business data record after creation and check the external business ID before read/update/delete:
 
 ```python
 instance = client.register_resource_instance(
@@ -90,9 +109,9 @@ authz = client.check_resource_or_raise(
 )
 ```
 
-`manifest.resource_id("order")` derives `knowledge:entity:order` from the declared module and resource; application code should not hardcode it. Set `PermissionSpec(..., scope="owner")` or `scope="organization"` for those checks. `global` skips instance ownership checks.
+`manifest.resource_id("order")` derives `knowledge:entity:order` from the declared module and resource; application code should not hardcode it. Set `PermissionSpec(..., scope="owner")` or `scope="organization"` only for `entity` or `custom` resources. `global` skips instance ownership checks.
 
-AuthHub administrators may additionally grant one user a named operation for one registered record in the management console. Such a collaboration grant is evaluated by the same `check_resource_or_raise()` call and applies only to that external record; it does not assign a global role or change the business database. Keep the record-level route dependency in place even when a frontend has rendered a collaboration control.
+AuthHub administrators may additionally share one registered business data record with one user in the management console. Such a record grant is evaluated by the same `check_resource_or_raise()` call and applies only to that external record; it does not assign a global role or change the business database. Keep the record-level route dependency in place even when a frontend has rendered a sharing control.
 
 The business database remains the source of truth. Create/update the business record first and then call the idempotent registration method; after deleting the business record, call `client.unregister_resource_instance(manifest.resource_id("order"), str(order.id))`. AuthHub never deletes business records and deliberately rejects deleting a resource definition or module while instance indexes remain.
 
@@ -196,7 +215,11 @@ For a normal FastAPI route, the route dependency can get the external ID from th
 @app.patch("/orders/{order_id}")
 async def update_order(
     order_id: str,
-    _: dict = Depends(require_resource_permission(
+    operation_auth: dict = Depends(require_permission(
+        client,
+        manifest.permission_code("/orders", "update"),
+    )),
+    data_auth: dict = Depends(require_resource_permission(
         client,
         manifest.permission_code("order", "update"),
         manifest.resource_id("order"),
@@ -213,15 +236,15 @@ async def update_order(
 The type is a stable authorization classification, not a hardcoded business resource:
 
 - `api`: an endpoint, such as `/documents`.
-- `entity`: a business collection, such as `order`.
+- `entity`: a business collection, such as `order`; this is a business data resource.
 - `mcp_server`: an upstream MCP server identifier.
 - `mcp_tool`: an upstream tool identifier.
 - `page`: a menu/page visibility identifier.
 - `ui_action`: a button, context-menu command, or batch operation.
 - `ui_component`: a Tab, region, or other conditionally rendered UI component.
-- `custom`: a domain-specific protected object.
+- `custom`: a domain-specific business data object.
 
-Choose the type that matches the thing being protected. The actual names and keys always come from the business service's manifest.
+`api`, MCP, page, and UI types are business operation resources. Only `entity` and `custom` resources can be registered as business data records. Choose the type that matches the thing being protected; the actual names and keys always come from the business service's manifest.
 
 ## Permission Snapshot Proxy For React
 

@@ -23,16 +23,29 @@ AuthHub 是一个独立的企业级认证与 RBAC 授权基础框架。它只负
 
 ## 授权模型
 
-AuthHub 的可视化配置以一条明确的 RBAC 链路组织：
+AuthHub 按三类权限组织授权，而不是把所有资源实例混为同一层：
 
 ```text
-业务模块 -> 资源 -> 权限 -> 角色 -> 用户 / 组织
+AuthHub 管理权限：管理 AuthHub 本身
+业务系统操作权限：调用接口、页面、按钮或 MCP 能力
+业务系统数据权限：访问某类业务数据及其具体记录
 ```
 
-- **业务模块**：上游业务的边界，例如“订单中心”或“MCP 管理”。它是归属和隔离单位，不是前端页面或组件。
-- **资源**：需要授权的业务对象，并且必须属于一个业务模块。可选类型为 `api`（API 接口）、`entity`（业务实体/集合）、`mcp_server`、`mcp_tool`、`page`（页面/菜单）、`ui_action`（按钮/命令/批量操作）、`ui_component`（Tab/区域等条件渲染组件）和 `custom`。这些是授权分类，不是 AuthHub 内置的业务对象；实际名称和标识由上游服务注册。
-- **权限**：对一个资源执行的动作。页面/菜单与 UI 组件只能使用 `view`/`manage`，UI 操作只能使用 `execute`/`manage`，MCP Tool 只能使用 `view`/`execute`/`manage`，API 和业务实体可以使用 `read`、`create`、`update`、`delete` 等动作。权限的资源、模块和操作由服务端校验，不能只依赖管理端下拉框。
-- **角色**：权限集合；用户通过角色获得权限。用户也可关联一个或多个组织，用于组织归属和后续数据范围策略扩展。
+- **业务模块**：上游业务的边界，例如“订单中心”或“MCP 管理”。一个模块可以同时声明操作资源和数据资源。
+- **角色**：权限集合；用户通过一个或多个角色取得权限，多个角色的有效权限取并集。用户也可关联一个或多个组织，用于数据范围判断。
+- **权限资源**：权限对应的受控对象。资源类型和所属模块确定权限类别，服务端不会信任仅由管理台传入的类别。
+
+### 业务系统操作权限
+
+`api`、`mcp_server`、`mcp_tool`、`page`、`ui_action` 和 `ui_component` 都属于业务系统操作权限。例如调用一个 API、显示页面、执行按钮命令或调用 MCP Tool。
+
+这类权限只能使用 `global` 范围：角色决定用户是否可以执行该能力。前端的页面和按钮控制只能改善体验，业务后端仍必须使用 SDK 进行操作权限校验。
+
+### 业务系统数据权限
+
+`entity` 和 `custom` 属于业务系统数据权限，例如订单、文档、项目、资产或其他需要逐条控制的业务对象。它们可以使用 `global`、`owner`、`organization` 范围；只有这类资源能由业务系统登记数据记录，并支持把某一条记录分享给指定用户。
+
+数据权限不替代操作权限。更新订单等请求通常需要同时满足：调用更新接口的操作权限，以及该订单记录的 `update` 数据权限。角色表示“原则上能做什么”，归属、组织范围和逐记录分享决定“能否操作这一条数据”。
 
 ### AuthHub 内置管理权限
 
@@ -110,9 +123,9 @@ docker compose up --build
 - `GET /api/auth/user-permissions`
 - `POST /api/modules/register`：幂等保存业务模块及权限元数据
 - `POST /api/resources`、`DELETE /api/resources/{resource_id}`：管理模块下的资源定义
-- `POST /api/resource-instances`、`DELETE /api/resource-instances?resource_id=...&external_id=...`：业务服务幂等登记/注销记录的外部 ID、用户归属和组织归属
-- `GET`、`PUT /api/resource-instances/{instance_id}/grants`：系统管理员查看或替换一个资源实例的协作者操作权限
-- `GET`、`PUT /api/resource-instances/by-external/grants`：资源 owner 或系统管理员按 `resource_id + external_id` 查看或替换该实例授权，不暴露内部实例 ID
+- `POST /api/resource-instances`、`DELETE /api/resource-instances?resource_id=...&external_id=...`：业务服务幂等登记/注销业务数据记录的外部 ID、用户归属和组织归属
+- `GET`、`PUT /api/resource-instances/{instance_id}/grants`：系统管理员查看或替换一个业务数据记录的用户分享
+- `GET`、`PUT /api/resource-instances/by-external/grants`：记录 owner 或系统管理员按 `resource_id + external_id` 查看或替换该记录分享，不暴露内部实例 ID
 - `GET /api/auth/users/resolve?username=...`：持有 `authhub:custom:share-recipient:read` 的用户按精确用户名解析一个可授权对象；不提供可枚举的用户目录
 - `POST /api/permissions`：创建资源操作权限，并可同时授予角色
 
@@ -135,7 +148,7 @@ hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log
 
 框架不会创建或部署外部基础设施，也不会关闭宿主传入的数据库连接池或 Redis 客户端。
 
-## 业务资源实例归属
+## 业务数据记录归属
 
 资源定义例如 `orders:entity:order` 只描述哪类对象需要授权。业务服务创建订单后注册归属索引，不上传订单业务字段：
 
@@ -148,9 +161,9 @@ hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log
 }
 ```
 
-权限范围可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先检查角色权限，再检查此实例归属。系统超级管理员对已存在的资源实例始终允许操作。业务数据库仍是订单、文档等字段的唯一真相源。
+只有业务数据权限可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先检查角色权限，再检查此数据记录的归属。系统超级管理员对已存在的数据记录始终允许操作。业务数据库仍是订单、文档等字段的唯一真相源。
 
-对于临时协作、某个 MCP Server 的维护人或单条记录的例外访问，系统管理员可以在管理端“资源实例 -> 协作授权”中为指定用户授予该实例所属资源的具体操作权限。业务系统也可以基于 `by-external/grants` 让该记录的 owner 管理自身记录的协作者，例如让 Skill 创建者授予同事该 Skill 的执行权。这个授权只对一个 `resource_id + external_id` 生效，不会修改用户角色，也不会扩展到同类型的其他记录；在 `check-resource` 中命中时结果为 `matched_by: "resource_grant"`。角色仍是默认的批量授权方式，实例授权只用于明确的记录级例外。
+对于临时协作或单条数据记录的例外访问，系统管理员可以在管理端“数据记录与分享”中为指定用户授予该记录所属数据资源的具体操作权限。业务系统也可以基于 `by-external/grants` 让该记录的 owner 管理自身记录的分享用户。这个授权只对一个 `resource_id + external_id` 生效，不会修改用户角色，也不会扩展到同类型的其他记录；在 `check-resource` 中命中时结果为 `matched_by: "resource_grant"`。角色仍是默认的批量授权方式，记录分享只用于明确的数据级例外。
 
 业务服务在自身事务成功后幂等调用“登记/更新归属”；删除业务记录后幂等调用“注销”。这是一致性索引，不是业务数据副本：短暂同步失败应由业务服务通过 outbox、重试队列或定期对账补偿，不能由 AuthHub 反向修改业务表。`auth-hub-client[sqlalchemy]` 已提供事务型 Outbox、提交后投递和重试能力，业务服务只需将其 `auth_hub_outbox` 表纳入自己的迁移。为防止丢失仍在使用的归属索引，资源定义或模块在存在资源实例时会拒绝删除。
 

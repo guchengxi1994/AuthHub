@@ -73,6 +73,24 @@ class ClientSdkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             manifest.resource_id("order")
 
+    def test_manifest_only_allows_record_scopes_for_business_data(self):
+        operation_manifest = ModuleManifest(
+            module_id="orders",
+            name="Orders",
+            resources=[ResourceSpec.api("/orders", "Orders API")],
+            permissions=[PermissionSpec("read", "Read own orders", resource="/orders", scope="owner")],
+        )
+        with self.assertRaisesRegex(ValueError, "business data"):
+            operation_manifest.to_payload()
+
+        data_manifest = ModuleManifest(
+            module_id="orders",
+            name="Orders",
+            resources=[ResourceSpec.entity("order", "Orders")],
+            permissions=[PermissionSpec("read", "Read own orders", resource="order", scope="owner")],
+        )
+        self.assertEqual(data_manifest.to_payload()["permissions"][0]["permission_category"], "business_data")
+
     def test_registration_key_allows_service_sync_without_admin_token(self):
         hub = AuthHub.in_memory(AuthHubSettings(module_registration_key="test-registration-key"))
         self.assertEqual(_module_registrar_actor(hub, None, "test-registration-key"), "service:module-registration")
@@ -188,11 +206,11 @@ class ClientSdkTests(unittest.TestCase):
         from auth_hub.api import create_app
 
         hub = AuthHub.in_memory()
-        module = hub.register_module("mcp", "MCP")
-        resource = hub.create_resource(module.id, "mcp_server", "server", "MCP servers")
-        permission = hub.create_permission(None, "Manage server", module_id=module.id, resource_id=resource.id, action="manage")
+        module = hub.register_module("documents", "Documents")
+        resource = hub.create_resource(module.id, "entity", "document", "Documents")
+        permission = hub.create_permission(None, "Update document", module_id=module.id, resource_id=resource.id, action="update")
         collaborator = hub.create_user("collaborator", "password")
-        instance = hub.register_resource_instance(resource.id, "server-100")
+        instance = hub.register_resource_instance(resource.id, "document-100")
         app = create_app(auth_hub=hub)
 
         with TestClient(app) as client:
@@ -204,7 +222,7 @@ class ClientSdkTests(unittest.TestCase):
             index = client.get("/api/resource-instances", headers=headers).json()["items"]
             self.assertEqual(index[0]["grant_count"], 1)
             token = client.post("/api/auth/login", json={"username": "collaborator", "password": "password"}).json()["access_token"]
-            result = client.post("/api/auth/check-resource", headers={"Authorization": f"Bearer {token}"}, json={"permission": permission.code, "resource_id": resource.id, "external_id": "server-100"}).json()
+            result = client.post("/api/auth/check-resource", headers={"Authorization": f"Bearer {token}"}, json={"permission": permission.code, "resource_id": resource.id, "external_id": "document-100"}).json()
             self.assertTrue(result["allowed"])
             self.assertEqual(result["matched_by"], "resource_grant")
 
@@ -212,14 +230,14 @@ class ClientSdkTests(unittest.TestCase):
         from auth_hub.api import create_app
 
         hub = AuthHub.in_memory(AuthHubSettings(module_registration_key="service-key"))
-        module = hub.register_module("mcp", "MCP")
-        resource = hub.create_resource(module.id, "mcp_tool", "tool", "MCP tools")
-        permission = hub.create_permission(None, "Execute tool", module_id=module.id, resource_id=resource.id, action="execute")
+        module = hub.register_module("orders", "Orders")
+        resource = hub.create_resource(module.id, "entity", "order", "Orders")
+        permission = hub.create_permission(None, "Read order", module_id=module.id, resource_id=resource.id, action="read")
         recipient = hub.create_user("recipient", "password")
-        instance = hub.register_resource_instance(resource.id, "orders:query")
+        instance = hub.register_resource_instance(resource.id, "order-100")
         app = create_app(auth_hub=hub)
 
-        payload = {"checks": [{"id": "orders-query", "permission": permission.code, "resource_id": resource.id, "external_id": instance.external_id}]}
+        payload = {"checks": [{"id": "order-100", "permission": permission.code, "resource_id": resource.id, "external_id": instance.external_id}]}
         with TestClient(app) as client:
             headers = {"X-AuthHub-Registration-Key": "service-key"}
             denied = client.post(f"/api/service/users/{recipient.id}/access-checks", headers=headers, json=payload)

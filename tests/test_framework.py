@@ -166,24 +166,36 @@ class FrameworkTests(unittest.TestCase):
 
     def test_resource_instance_grant_allows_a_collaborator_without_global_role(self):
         hub = AuthHub.in_memory()
-        module = hub.register_module("mcp", "MCP")
-        server = hub.create_resource(module.id, "mcp_server", "server", "MCP servers")
-        tool = hub.create_resource(module.id, "mcp_tool", "tool", "MCP tools")
-        manage_server = hub.create_permission(None, "Manage MCP server", module_id=module.id, resource_id=server.id, action="manage")
-        manage_tool = hub.create_permission(None, "Manage MCP tool", module_id=module.id, resource_id=tool.id, action="manage")
+        module = hub.register_module("documents", "Documents")
+        document = hub.create_resource(module.id, "entity", "document", "Documents")
+        project = hub.create_resource(module.id, "entity", "project", "Projects")
+        update_document = hub.create_permission(None, "Update document", module_id=module.id, resource_id=document.id, action="update")
+        update_project = hub.create_permission(None, "Update project", module_id=module.id, resource_id=project.id, action="update")
         owner = hub.create_user("owner", "password")
         collaborator = hub.create_user("collaborator", "password")
-        instance = hub.register_resource_instance(server.id, "server-100", owner_user_id=owner.id)
+        instance = hub.register_resource_instance(document.id, "document-100", owner_user_id=owner.id)
         token = hub.login("collaborator", "password")["access_token"]
 
-        self.assertEqual(hub.can_access_resource_instance(token, manage_server.code, instance.id).reason, "PERMISSION_DENIED")
-        grants = hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [manage_server.code]}])
+        self.assertEqual(hub.can_access_resource_instance(token, update_document.code, instance.id).reason, "PERMISSION_DENIED")
+        grants = hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [update_document.code]}])
         self.assertEqual(len(grants), 1)
-        result = hub.can_access_resource_instance(token, manage_server.code, instance.id)
+        result = hub.can_access_resource_instance(token, update_document.code, instance.id)
         self.assertTrue(result.allowed)
         self.assertEqual(result.matched_by, "resource_grant")
         with self.assertRaises(ValidationError):
-            hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [manage_tool.code]}])
+            hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [update_project.code]}])
+
+    def test_business_operation_permissions_are_global_and_cannot_use_record_authorization(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("orders", "Orders")
+        api = hub.create_resource(module.id, "api", "/orders", "Orders API")
+        with self.assertRaises(ValidationError):
+            hub.create_permission(None, "Read own orders", module_id=module.id, resource_id=api.id, action="read", scope="owner")
+        with self.assertRaises(ValidationError):
+            hub.register_resource_instance(api.id, "order-100")
+        permission = hub.create_permission(None, "Read orders API", module_id=module.id, resource_id=api.id, action="read")
+        self.assertEqual(hub.permission_dict(permission)["permission_category"], "business_operation")
+        self.assertEqual(hub.resource_dict(api)["permission_category"], "business_operation")
 
     def test_resource_instance_grants_are_persisted_and_removed_with_instance(self):
         with tempfile.TemporaryDirectory() as directory:
