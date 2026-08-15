@@ -1,6 +1,8 @@
 FROM python:3.13-slim
 
-ARG AUTH_HUB_RELEASE=0.2.0
+# Leave the release empty for local builds so /api/meta follows VERSION in
+# the checked-out source. CI may pass an immutable release explicitly.
+ARG AUTH_HUB_RELEASE
 ARG AUTH_HUB_BUILD=container
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

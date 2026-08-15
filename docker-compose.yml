@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        AUTH_HUB_RELEASE: "${AUTH_HUB_RELEASE:-0.2.0}"
+        # Empty in local development: the service falls back to VERSION in source.
+        AUTH_HUB_RELEASE: "${AUTH_HUB_RELEASE:-}"
         AUTH_HUB_BUILD: "${AUTH_HUB_BUILD:-local}"
     environment:
       AUTH_HUB_DATABASE: sqlite+pysqlite:////var/lib/authhub/authhub.db
@@ -13,7 +14,7 @@ services:
       AUTH_HUB_ADMIN_USERNAME: "${AUTH_HUB_ADMIN_USERNAME:-admin}"
       AUTH_HUB_ADMIN_PASSWORD: "${AUTH_HUB_ADMIN_PASSWORD:?Set AUTH_HUB_ADMIN_PASSWORD in .env before starting AuthHub}"
       AUTH_HUB_MODULE_REGISTRATION_KEY: "${AUTH_HUB_MODULE_REGISTRATION_KEY:-}"
-      AUTH_HUB_RELEASE: "${AUTH_HUB_RELEASE:-0.2.0}"
+      AUTH_HUB_RELEASE: "${AUTH_HUB_RELEASE:-}"
       AUTH_HUB_BUILD: "${AUTH_HUB_BUILD:-local}"
     ports:
       - "${AUTH_HUB_PORT:-8000}:8000"
