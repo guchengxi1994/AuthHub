@@ -16,7 +16,7 @@ except ImportError as error:  # pragma: no cover
     JSONResponse = None  # type: ignore
     _FASTAPI_ERROR = error
 
-from .application import AuthHub, AuthHubSettings
+from .application import AUTHHUB_SYSTEM_MODULE_ID, AuthHub, AuthHubSettings, authhub_system_permission
 from .domain.errors import AuthHubError, AuthorizationError, NotFoundError, ValidationError
 from .ports.services import Cache
 from .version import VERSION, runtime_release
@@ -51,7 +51,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.get("/api/admin/overview")
     async def admin_overview(authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "page", "admin", "view")
         return {"users": len(hub.list_users()), "organizations": len(hub.list_organizations()), "roles": len(hub.list_roles()), "permissions": len(hub.list_permissions()), "modules": len(hub.list_modules()), "resources": len(hub.list_resources()), "resource_instances": len(hub.repository.list_resource_instances()), "audit_events": len(hub.list_audit_events(limit=500))}
 
     @app.post("/api/auth/login")
@@ -74,7 +74,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         This deliberately does not expose a browsable user directory. The
         caller must already know the AuthHub username of the intended recipient.
         """
-        hub.authenticate(_bearer(authorization))
+        _require_system_permission(hub, authorization, "custom", "share-recipient", "read")
         user = hub.repository.get_user_by_username(username.strip())
         if not user or not user.enabled:
             raise NotFoundError("user", username)
@@ -97,149 +97,159 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.get("/api/users")
     async def list_users(authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "users", "read")
         return {"items": [hub.user_dict(item) for item in hub.list_users()]}
 
     @app.post("/api/users")
     async def create_user(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "users", "create")
+        for role_id in payload.get("role_ids") or []:
+            _require_assignable_role(hub, actor, str(role_id))
         return hub.user_dict(hub.create_user(str(payload.get("username", "")), str(payload.get("password", "")), display_name=str(payload.get("display_name", "")), email=payload.get("email"), organization_ids=payload.get("organization_ids") or [], role_ids=payload.get("role_ids") or [], actor_id=actor.id))
 
     @app.patch("/api/users/{user_id}")
     async def update_user(user_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "users", "update")
+        _require_manageable_user(hub, actor, user_id)
         return hub.user_dict(hub.update_user(user_id, display_name=payload.get("display_name"), email=payload.get("email"), enabled=payload.get("enabled"), actor_id=actor.id))
 
     @app.delete("/api/users/{user_id}")
     async def delete_user(user_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "users", "delete")
+        _require_manageable_user(hub, actor, user_id)
         return hub.user_dict(hub.delete_user(user_id, actor_id=actor.id))
 
     @app.get("/api/users/{user_id}/roles")
     async def user_roles(user_id: str, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "users", "read")
         return {"items": [hub.role_dict(item) for item in hub.user_roles(user_id)]}
 
     @app.get("/api/users/{user_id}/organizations")
     async def user_organizations(user_id: str, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "users", "read")
         return {"items": [hub.organization_dict(item) for item in hub.user_organizations(user_id)]}
 
     @app.post("/api/users/{user_id}/organizations/{organization_id}")
     async def assign_organization(user_id: str, organization_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.assign_organization(user_id, organization_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "users", "update"); _require_manageable_user(hub, actor, user_id); hub.assign_organization(user_id, organization_id, actor_id=actor.id); return {"success": True}
 
     @app.delete("/api/users/{user_id}/organizations/{organization_id}")
     async def remove_organization(user_id: str, organization_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.remove_organization(user_id, organization_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "users", "update"); _require_manageable_user(hub, actor, user_id); hub.remove_organization(user_id, organization_id, actor_id=actor.id); return {"success": True}
 
     @app.get("/api/organizations")
     async def list_organizations(authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "organizations", "read")
         return {"items": [hub.organization_dict(item) for item in hub.list_organizations()], "tree": hub.organization_tree()}
 
     @app.post("/api/organizations")
     async def create_organization(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "organizations", "create")
         org = hub.create_organization(str(payload.get("name", "")), parent_id=payload.get("parent_id"), description=payload.get("description"), actor_id=actor.id)
         return hub.organization_dict(org)
 
     @app.patch("/api/organizations/{organization_id}")
     async def update_organization(organization_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "organizations", "update")
         changes = {"name": payload.get("name"), "description": payload.get("description"), "enabled": payload.get("enabled"), "actor_id": actor.id}
         if "parent_id" in payload: changes["parent_id"] = payload["parent_id"]
         return hub.organization_dict(hub.update_organization(organization_id, **changes))
 
     @app.delete("/api/organizations/{organization_id}")
     async def delete_organization(organization_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.delete_organization(organization_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "organizations", "delete"); hub.delete_organization(organization_id, actor_id=actor.id); return {"success": True}
 
     @app.get("/api/roles")
     async def list_roles(authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "roles", "read")
         return {"items": [hub.role_dict(item) for item in hub.list_roles()]}
 
     @app.post("/api/roles")
     async def create_role(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "roles", "create")
         return hub.role_dict(hub.create_role(payload.get("code"), str(payload.get("name", "")), description=payload.get("description"), actor_id=actor.id))
 
     @app.patch("/api/roles/{role_id}")
     async def update_role(role_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "roles", "update")
+        _require_manageable_role(hub, actor, role_id)
         return hub.role_dict(hub.update_role(role_id, name=payload.get("name"), description=payload.get("description"), enabled=payload.get("enabled"), actor_id=actor.id))
 
     @app.delete("/api/roles/{role_id}")
     async def delete_role(role_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.delete_role(role_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "roles", "delete"); _require_manageable_role(hub, actor, role_id); hub.delete_role(role_id, actor_id=actor.id); return {"success": True}
 
     @app.get("/api/roles/{role_id}/permissions")
     async def role_permissions(role_id: str, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "roles", "read")
         return {"items": [hub.permission_dict(item) for item in hub.role_permissions(role_id)]}
 
     @app.post("/api/users/{user_id}/roles/{role_id}")
     async def assign_role(user_id: str, role_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.assign_role(user_id, role_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "users", "update"); _require_manageable_user(hub, actor, user_id); _require_assignable_role(hub, actor, role_id); hub.assign_role(user_id, role_id, actor_id=actor.id); return {"success": True}
 
     @app.delete("/api/users/{user_id}/roles/{role_id}")
     async def remove_role(user_id: str, role_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.remove_role(user_id, role_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "users", "update"); _require_manageable_user(hub, actor, user_id); _require_manageable_role(hub, actor, role_id); hub.remove_role(user_id, role_id, actor_id=actor.id); return {"success": True}
 
     @app.post("/api/roles/{role_id}/permissions/{permission_code:path}")
     async def assign_permission(role_id: str, permission_code: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.assign_permission(role_id, permission_code, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "roles", "update"); _require_manageable_role(hub, actor, role_id); _require_assignable_permission(hub, actor, permission_code); hub.assign_permission(role_id, permission_code, actor_id=actor.id); return {"success": True}
 
     @app.delete("/api/roles/{role_id}/permissions/{permission_code:path}")
     async def remove_permission(role_id: str, permission_code: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.remove_permission(role_id, permission_code, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "roles", "update"); _require_manageable_role(hub, actor, role_id); _require_assignable_permission(hub, actor, permission_code); hub.remove_permission(role_id, permission_code, actor_id=actor.id); return {"success": True}
 
     @app.get("/api/permissions")
     async def list_permissions(authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "permissions", "read")
         return {"items": [hub.permission_dict(item) for item in hub.list_permissions()]}
 
     @app.post("/api/permissions")
     async def create_permission(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "permissions", "create")
+        for role_id in payload.get("role_ids") or []:
+            _require_manageable_role(hub, actor, str(role_id))
         permission = hub.create_permission(payload.get("code"), str(payload.get("name", "")), description=payload.get("description"), kind=str(payload.get("kind", "operation")), module_id=payload.get("module_id"), resource_id=payload.get("resource_id"), action=payload.get("action"), scope=str(payload.get("scope") or "global"), role_ids=payload.get("role_ids") or [], metadata=payload.get("metadata"), actor_id=actor.id)
         return hub.permission_dict(permission)
 
     @app.patch("/api/permissions/{permission_code:path}")
     async def update_permission(permission_code: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "permissions", "update")
+        _require_assignable_permission(hub, actor, permission_code)
         return hub.permission_dict(hub.update_permission(permission_code, name=payload.get("name"), description=payload.get("description"), enabled=payload.get("enabled"), metadata=payload.get("metadata"), actor_id=actor.id))
 
     @app.get("/api/modules")
     async def list_modules(authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "modules", "read")
         return {"items": [item.to_dict() for item in hub.list_modules()]}
 
     @app.get("/api/modules/{module_id}")
     async def get_module(module_id: str, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "modules", "read")
         return hub.get_module(module_id).to_dict()
 
     @app.get("/api/resources")
     async def list_resources(module_id: Optional[str] = None, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "resources", "read")
         return {"items": [hub.resource_dict(item) for item in hub.list_resources(module_id)]}
 
     @app.post("/api/resources")
     async def create_resource(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "resources", "create")
         return hub.resource_dict(hub.create_resource(str(payload.get("module_id") or ""), str(payload.get("resource_type") or ""), str(payload.get("resource_key") or ""), str(payload.get("name") or ""), metadata=payload.get("metadata"), actor_id=actor.id))
 
     @app.delete("/api/resources/{resource_id}")
     async def delete_resource(resource_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "resources", "delete")
+        if resource_id.startswith(f"{AUTHHUB_SYSTEM_MODULE_ID}:"):
+            raise ValidationError("built-in AuthHub resources cannot be deleted")
         hub.delete_resource(resource_id, actor_id=actor.id)
         return {"success": True}
 
     @app.get("/api/resource-instances")
     async def list_resource_instances(resource_id: Optional[str] = None, owner_user_id: Optional[str] = None, organization_id: Optional[str] = None, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "resource-instances", "read")
         return {"items": [{**hub.resource_instance_dict(item), "grant_count": len(hub.resource_instance_grants(item.id))} for item in hub.repository.list_resource_instances(resource_id, owner_user_id=owner_user_id, organization_id=organization_id)]}
 
     # Declare this static route before /{instance_id}/grants. Starlette matches
@@ -263,14 +273,23 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.get("/api/resource-instances/{instance_id}/grants")
     async def list_resource_instance_grants(instance_id: str, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "resource-instances", "read")
         return {"items": [hub.resource_instance_grant_dict(item) for item in hub.resource_instance_grants(instance_id)]}
 
     @app.put("/api/resource-instances/{instance_id}/grants")
     async def replace_resource_instance_grants(instance_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "resource-instances", "update")
         grants = payload.get("grants")
         if not isinstance(grants, list): raise ValidationError("grants must be a list")
+        if not actor.is_super_admin:
+            for grant in grants:
+                if not isinstance(grant, dict):
+                    continue
+                permission_codes = grant.get("permission_codes") or grant.get("permissions") or []
+                if isinstance(permission_codes, str):
+                    permission_codes = [permission_codes]
+                for permission_code in permission_codes:
+                    _require_assignable_permission(hub, actor, str(permission_code))
         return {"items": [hub.resource_instance_grant_dict(item) for item in hub.replace_resource_instance_grants(instance_id, grants, actor_id=actor.id)]}
 
     @app.post("/api/resource-instances")
@@ -288,21 +307,26 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.delete("/api/resource-instances/by-id/{instance_id}")
     async def delete_resource_instance(instance_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization)
+        actor = _require_system_permission(hub, authorization, "entity", "resource-instances", "delete")
         hub.delete_resource_instance(instance_id, actor_id=actor.id)
         return {"success": True}
 
     @app.delete("/api/modules/{module_id}")
     async def delete_module(module_id: str, authorization: Optional[str] = Header(None)):
-        actor = _require_admin(hub, authorization); hub.delete_module(module_id, actor_id=actor.id); return {"success": True}
+        actor = _require_system_permission(hub, authorization, "entity", "modules", "delete")
+        if module_id == AUTHHUB_SYSTEM_MODULE_ID:
+            raise ValidationError("built-in AuthHub module cannot be deleted")
+        hub.delete_module(module_id, actor_id=actor.id); return {"success": True}
 
     @app.get("/api/audit-events")
     async def list_audit_events(limit: int = 100, actor_id: Optional[str] = None, action: Optional[str] = None, authorization: Optional[str] = Header(None)):
-        _require_admin(hub, authorization)
+        _require_system_permission(hub, authorization, "entity", "audit-events", "read")
         return {"items": [hub.audit_event_dict(event) for event in hub.list_audit_events(limit=limit, actor_id=actor_id, action=action)]}
 
     @app.post("/api/modules/register")
     async def register_module(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):
+        if str(payload.get("module_id") or payload.get("moduleId") or "") == AUTHHUB_SYSTEM_MODULE_ID:
+            raise ValidationError("the built-in AuthHub module is managed by framework bootstrap")
         actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
         return hub.register_module(payload.get("module_id") or payload.get("moduleId"), str(payload.get("module_name") or payload.get("moduleName") or ""), description=payload.get("description"), permissions=payload.get("permissions"), apis=payload.get("apis"), resources=payload.get("resources"), metadata=payload.get("metadata"), actor_id=actor_id).to_dict()
 
@@ -315,6 +339,54 @@ def _require_admin(hub: AuthHub, authorization: Optional[str]):
     if not actor.is_super_admin:
         raise AuthorizationError("SYSTEM_ADMIN_REQUIRED")
     return actor
+
+
+def _require_system_permission(hub: AuthHub, authorization: Optional[str], resource_type: str, resource_key: str, action: str):
+    """Authorize an AuthHub management endpoint through built-in RBAC."""
+    token = _bearer(authorization)
+    actor = hub.authenticate(token)
+    permission = authhub_system_permission(resource_type, resource_key, action)
+    result = hub.check_permission(token, permission, context={"module": AUTHHUB_SYSTEM_MODULE_ID, "resource": resource_key})
+    if not result.allowed:
+        raise AuthorizationError("PERMISSION_DENIED", f"missing permission: {permission}")
+    return actor
+
+
+def _require_manageable_user(hub: AuthHub, actor: Any, user_id: str):
+    user = hub.repository.get_user(user_id)
+    if not user:
+        raise NotFoundError("user", user_id)
+    if user.is_super_admin and not actor.is_super_admin:
+        raise AuthorizationError("PERMISSION_DENIED", "system administrators can only be managed by a system administrator")
+    return user
+
+
+def _require_manageable_role(hub: AuthHub, actor: Any, role_id: str):
+    role = hub.repository.get_role(role_id)
+    if not role:
+        raise NotFoundError("role", role_id)
+    if actor.is_super_admin:
+        return role
+    if role.built_in:
+        raise AuthorizationError("PERMISSION_DENIED", "built-in roles can only be managed by a system administrator")
+    actor_permissions = set(hub.user_permissions(actor.id))
+    role_permissions = set(hub.repository.role_permission_codes(role.id))
+    if not role_permissions.issubset(actor_permissions):
+        raise AuthorizationError("PERMISSION_DENIED", "cannot manage a role with permissions you do not hold")
+    return role
+
+
+def _require_assignable_role(hub: AuthHub, actor: Any, role_id: str):
+    return _require_manageable_role(hub, actor, role_id)
+
+
+def _require_assignable_permission(hub: AuthHub, actor: Any, permission_code: str):
+    permission = hub.repository.get_permission(permission_code)
+    if not permission:
+        raise NotFoundError("permission", permission_code)
+    if not actor.is_super_admin and permission.code not in set(hub.user_permissions(actor.id)):
+        raise AuthorizationError("PERMISSION_DENIED", "cannot delegate a permission you do not hold")
+    return permission
 
 
 def _require_resource_grant_manager(hub: AuthHub, authorization: Optional[str], resource_id: str, external_id: str):

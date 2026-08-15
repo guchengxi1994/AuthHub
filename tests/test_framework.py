@@ -18,6 +18,14 @@ class FrameworkTests(unittest.TestCase):
         self.assertTrue(allowed.allowed)
         self.assertEqual(allowed.matched_by, "system_admin")
 
+    def test_bootstrap_registers_assignable_authhub_management_permissions(self):
+        hub = AuthHub.in_memory()
+        role = hub.repository.get_role_by_code("authhub:admin")
+        self.assertIsNotNone(hub.get_module("authhub"))
+        self.assertIsNotNone(hub.repository.get_resource("authhub:entity:users"))
+        self.assertIsNotNone(hub.repository.get_permission("authhub:entity:organizations:read"))
+        self.assertIn("authhub:custom:share-recipient:read", hub.repository.role_permission_codes(role.id))
+
     def test_role_permission_and_cache_invalidation(self):
         repository = InMemoryAuthHubRepository()
         hub = AuthHub(repository, InMemoryCache(), InMemoryTokenService(), SimplePasswordHasher(), InMemoryAuditLog())

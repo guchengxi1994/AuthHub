@@ -17,7 +17,7 @@ def _require_sqlalchemy() -> Dict[str, Any]:
     try:
         from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, MetaData, String, Table, UniqueConstraint, create_engine, delete, insert, select, update
         from sqlalchemy.exc import IntegrityError
-        from sqlalchemy.pool import StaticPool
+        from sqlalchemy.pool import NullPool, StaticPool
     except ImportError as error:  # pragma: no cover
         raise RuntimeError("AuthHub requires SQLAlchemy. Install auth-hub or run: pip install sqlalchemy>=2.0") from error
     return locals()
@@ -41,7 +41,11 @@ class SQLAlchemyAuthHubRepository:
     def __init__(self, url_or_engine: Any = "sqlite+pysqlite:///authhub.db", *, engine: Any = None) -> None:
         sa = _require_sqlalchemy()
         self._sa = sa
-        self.engine = engine or sa["create_engine"](database_url(str(url_or_engine)), future=True, **({"connect_args": {"check_same_thread": False}, "poolclass": sa["StaticPool"]} if str(url_or_engine).endswith(":memory:") else {}))
+        url = database_url(str(url_or_engine))
+        sqlite_memory = url.endswith(":memory:")
+        sqlite_file = url.startswith("sqlite") and not sqlite_memory
+        engine_options = {"connect_args": {"check_same_thread": False}, "poolclass": sa["StaticPool"]} if sqlite_memory else {"poolclass": sa["NullPool"]} if sqlite_file else {}
+        self.engine = engine or sa["create_engine"](url, future=True, **engine_options)
         self.metadata = sa["MetaData"]()
         c, = (sa["Column"],)
         S, B, I, D, J = sa["String"], sa["Boolean"], sa["Integer"], sa["DateTime"], sa["JSON"]

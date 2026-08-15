@@ -73,6 +73,18 @@ class ClientSdkTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "sdk-probe")
 
+    def test_registration_endpoint_cannot_overwrite_builtin_authhub_module(self):
+        from auth_hub.api import create_app
+
+        with TestClient(create_app(auth_hub=AuthHub.in_memory(AuthHubSettings(module_registration_key="test-registration-key")))) as client:
+            response = client.post(
+                "/api/modules/register",
+                headers={"X-AuthHub-Registration-Key": "test-registration-key"},
+                json={"module_id": "authhub", "module_name": "Overridden", "resources": [], "permissions": []},
+            )
+
+        self.assertEqual(response.status_code, 422)
+
     def test_runtime_metadata_reports_running_release(self):
         from auth_hub.api import create_app
 
@@ -82,6 +94,52 @@ class ClientSdkTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"version": "2.3.4", "build": "test-build"})
+
+    def test_builtin_management_endpoints_use_assignable_permissions(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory()
+        organization = hub.create_organization("Engineering")
+        role = hub.create_role("support-reader", "Support reader")
+        user = hub.create_user("support", "password", role_ids=[role.id])
+        hub.assign_permission(role.id, "authhub:entity:users:read")
+        app = create_app(auth_hub=hub)
+
+        with TestClient(app) as client:
+            token = client.post("/api/auth/login", json={"username": "support", "password": "password"}).json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            self.assertEqual(client.get("/api/users", headers=headers).status_code, 200)
+            self.assertEqual(client.get("/api/organizations", headers=headers).status_code, 403)
+            self.assertEqual(client.get(f"/api/roles/{role.id}/permissions", headers=headers).status_code, 403)
+            self.assertEqual(client.get("/api/auth/users/resolve", params={"username": "admin"}, headers=headers).status_code, 403)
+
+            hub.assign_permission(role.id, "authhub:entity:organizations:read")
+            hub.assign_permission(role.id, "authhub:entity:roles:read")
+            hub.assign_permission(role.id, "authhub:custom:share-recipient:read")
+            self.assertEqual(client.get("/api/organizations", headers=headers).status_code, 200)
+            self.assertEqual(client.get(f"/api/roles/{role.id}/permissions", headers=headers).status_code, 200)
+            resolved = client.get("/api/auth/users/resolve", params={"username": "admin"}, headers=headers)
+            self.assertEqual(resolved.status_code, 200)
+            self.assertEqual(resolved.json()["username"], "admin")
+
+    def test_management_permissions_cannot_be_used_to_escalate_roles(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory()
+        operator_role = hub.create_role("user-editor", "User editor")
+        hub.assign_permission(operator_role.id, "authhub:entity:users:update")
+        operator = hub.create_user("operator", "password", role_ids=[operator_role.id])
+        protected_role = hub.create_role("protected", "Protected")
+        hub.assign_permission(protected_role.id, "authhub:entity:users:delete")
+        app = create_app(auth_hub=hub)
+
+        with TestClient(app) as client:
+            token = client.post("/api/auth/login", json={"username": "operator", "password": "password"}).json()["access_token"]
+            response = client.post(
+                f"/api/users/{operator.id}/roles/{protected_role.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.assertEqual(response.status_code, 403)
 
     def test_resource_instance_grant_management_api_and_resource_check(self):
         from auth_hub.api import create_app
@@ -116,6 +174,9 @@ class ClientSdkTests(unittest.TestCase):
         permission = hub.create_permission(None, "Execute Skill", module_id=module.id, resource_id=resource.id, action="execute", scope="owner")
         owner = hub.create_user("skill-owner", "password")
         recipient = hub.create_user("skill-user", "password")
+        share_role = hub.create_role("skill-sharing", "Skill sharing")
+        hub.assign_permission(share_role.id, "authhub:custom:share-recipient:read")
+        hub.assign_role(owner.id, share_role.id)
         hub.register_resource_instance(resource.id, "customer-summary", owner_user_id=owner.id)
         app = create_app(auth_hub=hub)
 

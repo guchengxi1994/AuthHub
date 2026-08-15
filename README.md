@@ -34,6 +34,14 @@ AuthHub 的可视化配置以一条明确的 RBAC 链路组织：
 - **权限**：对一个资源执行的动作。页面/菜单与 UI 组件只能使用 `view`/`manage`，UI 操作只能使用 `execute`/`manage`，MCP Tool 只能使用 `view`/`execute`/`manage`，API 和业务实体可以使用 `read`、`create`、`update`、`delete` 等动作。权限的资源、模块和操作由服务端校验，不能只依赖管理端下拉框。
 - **角色**：权限集合；用户通过角色获得权限。用户也可关联一个或多个组织，用于组织归属和后续数据范围策略扩展。
 
+### AuthHub 内置管理权限
+
+AuthHub 自身的管理 API 也受 RBAC 保护。启动时会幂等注册内置 `authhub` 模块及其资源，包括管理台、用户、组织、角色、权限、业务模块、资源定义、资源实例、审计日志和“授权用户精确查询”。`authhub:admin` 内置角色自动拥有全部内置权限；系统超级管理员仍保留绕过能力。
+
+例如，查询用户列表需要 `authhub:entity:users:read`，查询组织需要 `authhub:entity:organizations:read`，查询角色的权限需要 `authhub:entity:roles:read`。可将这些权限分配给受限的运维角色，而不必授予系统超级管理员身份。管理角色只能把自己已经拥有的权限授予其他角色或用户，不能操作系统管理员或内置管理员角色。
+
+资源 owner 发起分享时，按用户名解析收件人需要 `authhub:custom:share-recipient:read`。该权限只允许精确解析指定的已启用用户名，不提供可枚举的用户目录；应与业务资源的 owner/实例授权能力一并授予需要发起分享的角色。
+
 管理端创建模块、角色和权限时不要求填写技术 ID 或编码，系统会自动生成。Python SDK 和上游服务仍可提交显式模块 ID、角色编码或权限编码，以便进行幂等同步和程序化鉴权。
 
 ## 业务系统接入
@@ -103,7 +111,7 @@ docker compose up --build
 - `POST /api/resource-instances`、`DELETE /api/resource-instances?resource_id=...&external_id=...`：业务服务幂等登记/注销记录的外部 ID、用户归属和组织归属
 - `GET`、`PUT /api/resource-instances/{instance_id}/grants`：系统管理员查看或替换一个资源实例的协作者操作权限
 - `GET`、`PUT /api/resource-instances/by-external/grants`：资源 owner 或系统管理员按 `resource_id + external_id` 查看或替换该实例授权，不暴露内部实例 ID
-- `GET /api/auth/users/resolve?username=...`：已登录用户按精确用户名解析一个可授权对象；不提供可枚举的用户目录
+- `GET /api/auth/users/resolve?username=...`：持有 `authhub:custom:share-recipient:read` 的用户按精确用户名解析一个可授权对象；不提供可枚举的用户目录
 - `POST /api/permissions`：创建资源操作权限，并可同时授予角色
 
 鉴权失败统一返回 `code`，包括 `UNAUTHENTICATED`、`TOKEN_INVALID`、`USER_DISABLED`、`PERMISSION_DENIED` 等。

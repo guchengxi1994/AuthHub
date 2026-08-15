@@ -21,7 +21,7 @@ const resourceActions = {
   ui_component: ['view', 'manage'],
   custom: actions
 };
-const state = { token: sessionStorage.getItem('authhub.token'), me: null, page: 'overview' };
+const state = { token: sessionStorage.getItem('authhub.token'), me: null, permissions: new Set(), page: 'overview' };
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -38,6 +38,27 @@ const table = (headers, rows, emptyText = '暂无数据') => panel(`<div class="
 const pageHeader = (title, controls = '') => `<div class="mb-5 flex min-h-[34px] items-center justify-between gap-3"><h1 class="text-[22px] font-semibold leading-none text-slate-900">${esc(title)}</h1><div class="flex shrink-0 items-center gap-2">${controls}</div></div>`;
 const resourceLabel = value => resourceTypes[value] || value || '-';
 const actionLabel = value => actionLabels[value] || value || '-';
+const managementPermission = (type, key, action) => `authhub:${type}:${key}:${action}`;
+const can = (type, key, action) => Boolean(state.me?.is_super_admin || state.permissions.has(managementPermission(type, key, action)));
+const pagePermission = {
+  overview: ['page', 'admin', 'view'],
+  authorize: ['page', 'admin', 'view'],
+  users: ['entity', 'users', 'read'],
+  organizations: ['entity', 'organizations', 'read'],
+  roles: ['entity', 'roles', 'read'],
+  permissions: ['entity', 'permissions', 'read'],
+  modules: ['entity', 'modules', 'read'],
+  resources: ['entity', 'resources', 'read'],
+  'resource-instances': ['entity', 'resource-instances', 'read'],
+  audit: ['entity', 'audit-events', 'read']
+};
+const canOpenPage = page => Boolean(pagePermission[page] && can(...pagePermission[page]));
+const fallbackItems = { items: [] };
+const allowedPage = () => Object.keys(pagePermission).find(canOpenPage) || '';
+
+function applyNavigationPermissions() {
+  $$('.nav-item').forEach(item => item.classList.toggle('hidden', !canOpenPage(item.dataset.page)));
+}
 
 function setToast(message, type = 'success') {
   const el = $('#toast');
@@ -106,6 +127,7 @@ function ask(title, message, confirmLabel = '确认删除') {
 }
 
 function setPage(page) {
+  if (!canOpenPage(page)) return;
   state.page = page;
   $('#shell-title').textContent = pages[page];
   $('#shell-context').textContent = 'AuthHub';
@@ -172,10 +194,10 @@ function filterPermissionOptions(root, query) {
 }
 
 async function renderOverview() {
-  const [overview, audit] = await Promise.all([api('/api/admin/overview'), api('/api/audit-events?limit=8')]);
+  const [overview, audit] = await Promise.all([api('/api/admin/overview'), can('entity', 'audit-events', 'read') ? api('/api/audit-events?limit=8') : Promise.resolve(fallbackItems)]);
   const metrics = [['用户', overview.users, 'users', 'blue'], ['组织', overview.organizations, 'network', 'warning'], ['角色', overview.roles, 'key-round', 'active'], ['权限', overview.permissions, 'key-square', 'blue'], ['模块', overview.modules, 'boxes', 'warning'], ['资源', overview.resources, 'database-zap', 'active'], ['实例索引', overview.resource_instances, 'list-tree', 'blue']];
   const rows = audit.items.map(event => `<tr><td class="whitespace-nowrap text-xs text-slate-500">${esc(new Date(event.occurred_at).toLocaleString())}</td><td class="font-mono text-xs text-slate-700">${esc(event.action)}</td><td class="text-slate-500">${esc(event.target_type)} ${esc(event.target_id || '')}</td><td>${badge(event.outcome, event.outcome === 'success' || event.outcome === 'allowed' ? 'active' : 'danger')}</td></tr>`).join('');
-  $('#content').innerHTML = pageHeader('概览', `${button('权限校验', 'goto:authorize', 'badge-check', 'secondary')}${button('新增业务模块', 'new-module', 'plus', 'primary')}`)
+  $('#content').innerHTML = pageHeader('概览', state.me.is_super_admin ? `${button('权限校验', 'goto:authorize', 'badge-check', 'secondary')}${button('新增业务模块', 'new-module', 'plus', 'primary')}` : '')
     + `<div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7">${metrics.map(([label, value, name, tone]) => `<div class="surface min-w-0 px-4 py-3"><div class="flex items-center justify-between"><span class="text-xs font-medium text-slate-500">${label}</span><span class="grid h-7 w-7 place-items-center rounded-lg ${tone === 'active' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'}">${icon(name, 'h-4 w-4')}</span></div><div class="mt-2 text-2xl font-semibold leading-none text-slate-900">${value}</div></div>`).join('')}</div>`
     + `<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"><section class="surface overflow-hidden"><div class="flex h-12 items-center justify-between border-b border-slate-100 px-4"><h2 class="text-sm font-semibold text-slate-800">最近审计</h2><button type="button" class="text-sm font-medium text-brand-600 hover:text-brand-700" data-action="goto:audit">查看全部</button></div><div class="overflow-x-auto"><table class="data-table"><thead><tr><th>时间</th><th>动作</th><th>对象</th><th>结果</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${empty('暂无审计记录')}</td></tr>`}</tbody></table></div></section><section class="surface p-4"><h2 class="text-sm font-semibold text-slate-800">配置入口</h2><div class="mt-3 divide-y divide-slate-100"><button type="button" data-action="goto:modules" class="overview-link"><span>${icon('boxes', 'h-4 w-4')} 新增业务模块</span>${icon('chevron-right', 'h-4 w-4')}</button><button type="button" data-action="goto:resources" class="overview-link"><span>${icon('database-zap', 'h-4 w-4')} 建立受控资源</span>${icon('chevron-right', 'h-4 w-4')}</button><button type="button" data-action="goto:permissions" class="overview-link"><span>${icon('key-square', 'h-4 w-4')} 配置资源操作权限</span>${icon('chevron-right', 'h-4 w-4')}</button></div></section></div>`;
   bindActions();
@@ -200,14 +222,25 @@ async function renderAuthorize() {
 }
 
 async function renderUsers() {
-  const [users, organizations, roles] = await Promise.all([api('/api/users'), api('/api/organizations'), api('/api/roles')]);
+  const [users, organizations, roles] = await Promise.all([
+    api('/api/users'),
+    can('entity', 'organizations', 'read') ? api('/api/organizations') : Promise.resolve(fallbackItems),
+    can('entity', 'roles', 'read') ? api('/api/roles') : Promise.resolve(fallbackItems)
+  ]);
   const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
   const roleNames = Object.fromEntries(roles.items.map(item => [item.id, item.name]));
   const rows = users.items.map(user => {
     const assignedNames = (user.role_ids || []).map(id => roleNames[id] || id).join('、') || '-';
-    return `<tr data-user-row="${esc(user.id)}"><td><div class="font-medium text-slate-800">${esc(user.display_name || user.username)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(user.username)}</div></td><td class="max-w-[220px] truncate text-slate-500">${(user.organization_ids || []).map(id => esc(organizationNames[id] || id)).join('、') || '-'}</td><td class="max-w-[220px] truncate text-slate-500">${esc(assignedNames)}</td><td>${user.is_super_admin ? badge('系统管理员', 'blue') : status(user.enabled)}</td><td><div class="flex justify-end gap-1">${button('配置组织', `user-organizations:${user.id}`, 'network')}${button('配置角色', `user-roles:${user.id}`, 'key-round')}${user.is_super_admin ? '' : button(user.enabled ? '停用' : '启用', `user-toggle:${user.id}:${!user.enabled}`, 'power')}</div></td></tr>`;
+    const manageable = !user.is_super_admin || state.me.is_super_admin;
+    const controls = [
+      can('entity', 'users', 'update') && can('entity', 'organizations', 'read') && manageable ? button('配置组织', `user-organizations:${user.id}`, 'network') : '',
+      can('entity', 'users', 'update') && can('entity', 'roles', 'read') && manageable ? button('配置角色', `user-roles:${user.id}`, 'key-round') : '',
+      can('entity', 'users', 'update') && manageable ? button(user.enabled ? '停用' : '启用', `user-toggle:${user.id}:${!user.enabled}`, 'power') : ''
+    ].join('');
+    return `<tr data-user-row="${esc(user.id)}"><td><div class="font-medium text-slate-800">${esc(user.display_name || user.username)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(user.username)}</div></td><td class="max-w-[220px] truncate text-slate-500">${(user.organization_ids || []).map(id => esc(organizationNames[id] || id)).join('、') || '-'}</td><td class="max-w-[220px] truncate text-slate-500">${esc(assignedNames)}</td><td>${user.is_super_admin ? badge('系统管理员', 'blue') : status(user.enabled)}</td><td><div class="flex justify-end gap-1">${controls}</div></td></tr>`;
   });
-  $('#content').innerHTML = pageHeader('用户', button('新增用户', 'new-user', 'user-plus', 'primary'))
+  const createUser = can('entity', 'users', 'create') && can('entity', 'organizations', 'read') && can('entity', 'roles', 'read');
+  $('#content').innerHTML = pageHeader('用户', createUser ? button('新增用户', 'new-user', 'user-plus', 'primary') : '')
     + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="user-filter" class="field pl-9" placeholder="筛选用户名、组织或角色"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${users.items.length} 个用户</span></div>`
     + table(['用户', '所属组织', '已分配角色', '状态', '操作'], rows.join(''), '暂无用户');
   $('#user-filter').oninput = event => {
@@ -271,9 +304,9 @@ async function showUserOrganizations(userId) {
 async function renderOrganizations() {
   const data = await api('/api/organizations');
   const flatten = (items, depth = 0) => items.flatMap(item => [[item, depth], ...flatten(item.children || [], depth + 1)]);
-  const rows = flatten(data.tree).map(([org, depth]) => `<tr><td><div class="flex items-center" style="padding-left:${depth * 20}px">${depth ? '<span class="mr-2 text-slate-300">└</span>' : ''}<span class="font-medium text-slate-800">${esc(org.name)}</span></div></td><td class="text-slate-500">${esc(org.description || '-')}</td><td>${status(org.enabled)}</td><td><div class="flex justify-end">${button('编辑', `org-edit:${org.id}`, 'pencil')}</div></td></tr>`).join('');
+  const rows = flatten(data.tree).map(([org, depth]) => `<tr><td><div class="flex items-center" style="padding-left:${depth * 20}px">${depth ? '<span class="mr-2 text-slate-300">└</span>' : ''}<span class="font-medium text-slate-800">${esc(org.name)}</span></div></td><td class="text-slate-500">${esc(org.description || '-')}</td><td>${status(org.enabled)}</td><td><div class="flex justify-end">${can('entity', 'organizations', 'update') ? button('编辑', `org-edit:${org.id}`, 'pencil') : ''}</div></td></tr>`).join('');
   state.organizations = data.items;
-  $('#content').innerHTML = pageHeader('组织', button('新增组织', 'new-org', 'plus', 'primary')) + table(['组织名称', '描述', '状态', '操作'], rows, '暂无组织');
+  $('#content').innerHTML = pageHeader('组织', can('entity', 'organizations', 'create') ? button('新增组织', 'new-org', 'plus', 'primary') : '') + table(['组织名称', '描述', '状态', '操作'], rows, '暂无组织');
   bindActions(); refreshIcons();
 }
 
@@ -297,8 +330,9 @@ function showOrganization(id = '') {
 
 async function renderRoles() {
   const data = await api('/api/roles');
-  const rows = data.items.map(role => `<tr><td><div class="font-medium text-slate-800">${esc(role.name)}</div></td><td class="max-w-[280px] truncate text-slate-500">${esc(role.description || '-')}</td><td>${role.built_in ? badge('内置角色', 'blue') : status(role.enabled)}</td><td><button type="button" data-action="role-permissions:${role.id}" class="font-medium text-brand-600 hover:text-brand-700">配置权限</button></td><td><div class="flex justify-end">${role.built_in ? '' : button('删除', `role-delete:${role.id}`, 'trash-2')}</div></td></tr>`).join('');
-  $('#content').innerHTML = pageHeader('角色', button('新增角色', 'new-role', 'plus', 'primary')) + table(['角色', '描述', '状态', '权限', '操作'], rows, '暂无角色');
+  const canConfigurePermissions = can('entity', 'roles', 'update') && can('entity', 'permissions', 'read') && can('entity', 'modules', 'read') && can('entity', 'resources', 'read');
+  const rows = data.items.map(role => `<tr><td><div class="font-medium text-slate-800">${esc(role.name)}</div></td><td class="max-w-[280px] truncate text-slate-500">${esc(role.description || '-')}</td><td>${role.built_in ? badge('内置角色', 'blue') : status(role.enabled)}</td><td>${canConfigurePermissions ? `<button type="button" data-action="role-permissions:${role.id}" class="font-medium text-brand-600 hover:text-brand-700">配置权限</button>` : ''}</td><td><div class="flex justify-end">${can('entity', 'roles', 'delete') && !role.built_in ? button('删除', `role-delete:${role.id}`, 'trash-2') : ''}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('角色', can('entity', 'roles', 'create') ? button('新增角色', 'new-role', 'plus', 'primary') : '') + table(['角色', '描述', '状态', '权限', '操作'], rows, '暂无角色');
   bindActions(); refreshIcons();
 }
 
@@ -339,11 +373,16 @@ async function showRolePermissions(roleId) {
 }
 
 async function renderPermissions() {
-  const [permissions, modules, resources] = await Promise.all([api('/api/permissions'), api('/api/modules'), api('/api/resources')]);
+  const [permissions, modules, resources] = await Promise.all([
+    api('/api/permissions'),
+    can('entity', 'modules', 'read') ? api('/api/modules') : Promise.resolve(fallbackItems),
+    can('entity', 'resources', 'read') ? api('/api/resources') : Promise.resolve(fallbackItems)
+  ]);
   const scopeLabels = { global: '全部', owner: '本人归属', organization: '组织归属' };
   const groups = permissionGroups(permissions.items, modules.items, resources.items);
   const rows = groups.map(group => `<tr class="permission-table-group"><td colspan="4"><span>${esc(group.moduleName)}</span><strong>${esc(group.resourceName)}</strong><small>${esc(resourceLabel(group.resourceType))}</small></td></tr>${group.permissions.map(permission => `<tr data-permission-row="${esc(permission.code)}"><td><div class="font-medium text-slate-800">${esc(permission.name)}</div><div class="mt-0.5 font-mono text-xs text-slate-500">${esc(permission.code)}</div></td><td>${badge(actionLabel(permission.action), 'blue')}</td><td>${badge(scopeLabels[permission.scope || 'global'] || permission.scope || '全部', permission.scope === 'global' ? 'muted' : 'active')}</td><td>${status(permission.enabled)}</td></tr>`).join('')}`).join('');
-  $('#content').innerHTML = pageHeader('权限', button('新增权限', 'new-permission', 'plus', 'primary'))
+  const createPermission = can('entity', 'permissions', 'create') && can('entity', 'modules', 'read') && can('entity', 'resources', 'read') && can('entity', 'roles', 'read');
+  $('#content').innerHTML = pageHeader('权限', createPermission ? button('新增权限', 'new-permission', 'plus', 'primary') : '')
     + `<div class="mb-3 flex items-center justify-between"><div class="relative w-full max-w-xs">${icon('search', 'pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400')}<input id="permission-list-filter" class="field pl-9" placeholder="筛选模块、资源或权限"></div><span class="ml-3 whitespace-nowrap text-xs text-slate-500">${permissions.items.length} 项权限</span></div>`
     + table(['权限', '操作', '数据范围', '状态'], rows, '暂无权限。先创建业务模块和资源，再配置可授权操作。');
   $('#permission-list-filter').oninput = event => {
@@ -396,11 +435,15 @@ async function showPermission() {
 }
 
 async function renderModules() {
-  const [modules, resources, permissions] = await Promise.all([api('/api/modules'), api('/api/resources'), api('/api/permissions')]);
+  const [modules, resources, permissions] = await Promise.all([
+    api('/api/modules'),
+    can('entity', 'resources', 'read') ? api('/api/resources') : Promise.resolve(fallbackItems),
+    can('entity', 'permissions', 'read') ? api('/api/permissions') : Promise.resolve(fallbackItems)
+  ]);
   const resourceCount = resources.items.reduce((result, item) => ({ ...result, [item.module_id]: (result[item.module_id] || 0) + 1 }), {});
   const permissionCount = permissions.items.reduce((result, item) => ({ ...result, [item.module_id]: (result[item.module_id] || 0) + 1 }), {});
-  const rows = modules.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td class="max-w-[380px] truncate text-slate-500">${esc(item.description || '-')}</td><td>${resourceCount[item.id] || 0}</td><td>${permissionCount[item.id] || 0}</td><td><div class="flex justify-end">${button('删除', `module-delete:${item.id}`, 'trash-2')}</div></td></tr>`).join('');
-  $('#content').innerHTML = pageHeader('业务模块', button('新增业务模块', 'new-module', 'plus', 'primary')) + table(['业务模块', '描述', '资源', '权限', '操作'], rows, '暂无业务模块。先创建一个业务边界，再建立它的资源。');
+  const rows = modules.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td class="max-w-[380px] truncate text-slate-500">${esc(item.description || '-')}</td><td>${resourceCount[item.id] || 0}</td><td>${permissionCount[item.id] || 0}</td><td><div class="flex justify-end">${can('entity', 'modules', 'delete') && item.id !== 'authhub' ? button('删除', `module-delete:${item.id}`, 'trash-2') : ''}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('业务模块', state.me.is_super_admin ? button('新增业务模块', 'new-module', 'plus', 'primary') : '') + table(['业务模块', '描述', '资源', '权限', '操作'], rows, '暂无业务模块。先创建一个业务边界，再建立它的资源。');
   bindActions(); refreshIcons();
 }
 
@@ -420,19 +463,25 @@ function showNewModule() {
 }
 
 async function renderResources() {
-  const [resources, modules] = await Promise.all([api('/api/resources'), api('/api/modules')]);
+  const [resources, modules] = await Promise.all([api('/api/resources'), can('entity', 'modules', 'read') ? api('/api/modules') : Promise.resolve(fallbackItems)]);
   const moduleNames = Object.fromEntries(modules.items.map(item => [item.id, item.name]));
-  const rows = resources.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td>${badge(resourceLabel(item.resource_type), 'blue')}</td><td class="max-w-[260px] truncate font-mono text-xs text-slate-600">${esc(item.resource_key)}</td><td class="text-slate-500">${esc(moduleNames[item.module_id] || '-')}</td><td><div class="flex justify-end">${button('删除', `resource-delete:${item.id}`, 'trash-2')}</div></td></tr>`).join('');
-  $('#content').innerHTML = pageHeader('资源', button('新增资源', 'new-resource', 'plus', 'primary')) + table(['资源', '资源类别', '资源标识', '业务模块', '操作'], rows, '暂无资源。资源是需要被授权的对象，必须属于一个业务模块。');
+  const rows = resources.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(item.name)}</div></td><td>${badge(resourceLabel(item.resource_type), 'blue')}</td><td class="max-w-[260px] truncate font-mono text-xs text-slate-600">${esc(item.resource_key)}</td><td class="text-slate-500">${esc(moduleNames[item.module_id] || '-')}</td><td><div class="flex justify-end">${can('entity', 'resources', 'delete') && !item.id.startsWith('authhub:') ? button('删除', `resource-delete:${item.id}`, 'trash-2') : ''}</div></td></tr>`).join('');
+  $('#content').innerHTML = pageHeader('资源', can('entity', 'resources', 'create') && can('entity', 'modules', 'read') ? button('新增资源', 'new-resource', 'plus', 'primary') : '') + table(['资源', '资源类别', '资源标识', '业务模块', '操作'], rows, '暂无资源。资源是需要被授权的对象，必须属于一个业务模块。');
   bindActions(); refreshIcons();
 }
 
 async function renderResourceInstances() {
-  const [instances, resources, users, organizations] = await Promise.all([api('/api/resource-instances'), api('/api/resources'), api('/api/users'), api('/api/organizations')]);
+  const [instances, resources, users, organizations] = await Promise.all([
+    api('/api/resource-instances'),
+    can('entity', 'resources', 'read') ? api('/api/resources') : Promise.resolve(fallbackItems),
+    can('entity', 'users', 'read') ? api('/api/users') : Promise.resolve(fallbackItems),
+    can('entity', 'organizations', 'read') ? api('/api/organizations') : Promise.resolve(fallbackItems)
+  ]);
   const resourceNames = Object.fromEntries(resources.items.map(item => [item.id, item.name]));
   const userNames = Object.fromEntries(users.items.map(item => [item.id, item.display_name || item.username]));
   const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
-  const rows = instances.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td>${item.grant_count ? badge(`${item.grant_count} 位协作者`, 'active') : '<span class="text-xs text-slate-400">未授权</span>'}</td><td><div class="flex justify-end">${button('协作授权', `instance-grants:${item.id}`, 'users-round', 'secondary')}</div></td></tr>`).join('');
+  const canManageGrants = can('entity', 'resource-instances', 'update') && can('entity', 'resources', 'read') && can('entity', 'users', 'read') && can('entity', 'permissions', 'read') && can('entity', 'modules', 'read') && can('entity', 'organizations', 'read');
+  const rows = instances.items.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td>${item.grant_count ? badge(`${item.grant_count} 位协作者`, 'active') : '<span class="text-xs text-slate-400">未授权</span>'}</td><td><div class="flex justify-end">${canManageGrants ? button('协作授权', `instance-grants:${item.id}`, 'users-round', 'secondary') : ''}</div></td></tr>`).join('');
   $('#content').innerHTML = pageHeader('资源实例') + table(['资源', '业务记录 ID', '归属用户', '归属组织', '协作者', '操作'], rows, '暂无业务服务登记的资源实例。');
   bindActions(); refreshIcons();
 }
@@ -579,7 +628,12 @@ async function initialize() {
   if (!state.token) return;
   try {
     state.me = await api('/api/auth/me');
-    if (!state.me.is_super_admin) throw new Error('当前账户不是系统管理员');
+    const snapshot = await api('/api/auth/user-permissions');
+    state.permissions = new Set(snapshot.permissions || []);
+    const page = allowedPage();
+    if (!page) throw new Error('当前账户未被授予 AuthHub 管理权限');
+    state.page = page;
+    applyNavigationPermissions();
     $('#current-user').textContent = state.me.display_name || state.me.username;
     $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden');
     await render();

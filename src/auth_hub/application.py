@@ -26,6 +26,47 @@ RESOURCE_ACTIONS = {
 }
 RESOURCE_SCOPES = frozenset({"global", "owner", "organization"})
 
+# AuthHub's management APIs are resources too.  Keeping their declaration in
+# the framework means installations upgrade to granular management RBAC during
+# bootstrap instead of relying exclusively on the super-admin flag forever.
+AUTHHUB_SYSTEM_MODULE_ID = "authhub"
+AUTHHUB_SYSTEM_ROLE_CODE = "authhub:admin"
+AUTHHUB_SYSTEM_RESOURCES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("page", "admin", "AuthHub 管理台", ("view",)),
+    ("entity", "users", "用户", ("read", "create", "update", "delete")),
+    ("entity", "organizations", "组织", ("read", "create", "update", "delete")),
+    ("entity", "roles", "角色", ("read", "create", "update", "delete")),
+    ("entity", "permissions", "权限", ("read", "create", "update")),
+    ("entity", "modules", "业务模块", ("read", "delete")),
+    ("entity", "resources", "资源定义", ("read", "create", "delete")),
+    ("entity", "resource-instances", "资源实例", ("read", "update", "delete")),
+    ("entity", "audit-events", "审计日志", ("read",)),
+    ("custom", "share-recipient", "授权用户精确查询", ("read",)),
+)
+
+
+def authhub_system_permission(resource_type: str, resource_key: str, action: str) -> str:
+    return f"{AUTHHUB_SYSTEM_MODULE_ID}:{resource_type}:{resource_key}:{action}"
+
+
+def _authhub_system_manifest() -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    resources: list[Mapping[str, Any]] = []
+    permissions: list[Mapping[str, Any]] = []
+    for resource_type, resource_key, name, actions in AUTHHUB_SYSTEM_RESOURCES:
+        resource_id = f"{AUTHHUB_SYSTEM_MODULE_ID}:{resource_type}:{resource_key}"
+        resources.append({"id": resource_id, "resource_type": resource_type, "resource_key": resource_key, "name": name, "metadata": {"built_in": True}})
+        for action in actions:
+            permissions.append({
+                "id": authhub_system_permission(resource_type, resource_key, action),
+                "name": f"{action} {name}",
+                "resource_id": resource_id,
+                "resource_type": resource_type,
+                "resource_key": resource_key,
+                "action": action,
+                "scope": "global",
+            })
+    return resources, permissions
+
 
 def _registered_permission_code(module_id: str, permission: Mapping[str, Any]) -> str:
     code = str(permission.get("id") or permission.get("code") or "")
@@ -73,12 +114,28 @@ class AuthHub:
 
     def bootstrap(self) -> User:
         existing = self.repository.get_user_by_username(self.settings.admin_username)
-        if existing: return existing
-        admin = User(new_id(), self.settings.admin_username, self.passwords.hash(self.settings.admin_password), self.settings.admin_username, is_super_admin=True)
-        self.repository.save_user(admin)
-        role = Role(new_id(), "authhub:admin", "AuthHub administrator", built_in=True)
-        self.repository.save_role(role)
+        admin = existing or self.repository.save_user(User(new_id(), self.settings.admin_username, self.passwords.hash(self.settings.admin_password), self.settings.admin_username, is_super_admin=True))
+        role = self.repository.get_role_by_code(AUTHHUB_SYSTEM_ROLE_CODE)
+        if not role:
+            role = self.repository.save_role(Role(new_id(), AUTHHUB_SYSTEM_ROLE_CODE, "AuthHub administrator", built_in=True))
         self.repository.assign_role(admin.id, role.id)
+
+        # Bootstrap runs on every process start so databases created by an
+        # earlier AuthHub version receive these definitions as an upgrade.
+        resources, permissions = _authhub_system_manifest()
+        self.register_module(
+            AUTHHUB_SYSTEM_MODULE_ID,
+            "AuthHub 系统管理",
+            description="AuthHub 内置管理能力",
+            resources=resources,
+            permissions=permissions,
+            metadata={"built_in": True},
+            actor_id="system:bootstrap",
+        )
+        for permission in permissions:
+            self.repository.assign_permission(role.id, str(permission["id"]))
+        for user in self.repository.list_users():
+            self.invalidate_user_permissions(user.id)
         return admin
 
     def login(self, username: str, password: str) -> Mapping[str, Any]:
