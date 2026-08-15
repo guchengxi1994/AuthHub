@@ -413,6 +413,24 @@ class AuthHub:
             return AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
         return self.can_access_resource_instance(access_token, permission, instance.id, context=context)
 
+    def can_user_access_resource(self, user_id: str, permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
+        """Evaluate an explicit user's access without requiring that user's token.
+
+        This is intentionally exposed only through service-authenticated APIs for
+        preflight workflows, such as validating a recipient before a business
+        service grants access to a composed asset.
+        """
+        instance = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
+        if not instance:
+            user = self._user_or_raise(user_id)
+            return AuthorizationResult(False, bool(user.enabled), permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
+        return self.check_permission_for_user(
+            user_id,
+            permission,
+            resource=instance.external_id,
+            context={"resource_instance_id": instance.id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, **dict(context or {})},
+        )
+
     def delete_resource(self, resource_id: str, *, actor_id: Optional[str] = None) -> None:
         resource = self.repository.get_resource(resource_id)
         if not resource: raise NotFoundError("resource", resource_id)
@@ -444,6 +462,16 @@ class AuthHub:
         if not permission: raise ValidationError("permission is required")
         try: user = self.authenticate(access_token)
         except AuthenticationError as error: return AuthorizationResult(False, False, permission, reason=error.code)
+        return self._check_permission_for_user(user, permission, resource=resource, context=context)
+
+    def check_permission_for_user(self, user_id: str, permission: str, *, resource: Optional[str] = None, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
+        if not permission: raise ValidationError("permission is required")
+        user = self._user_or_raise(user_id)
+        if not user.enabled:
+            return AuthorizationResult(False, False, permission, user.id, reason="USER_DISABLED")
+        return self._check_permission_for_user(user, permission, resource=resource, context=context)
+
+    def _check_permission_for_user(self, user: User, permission: str, *, resource: Optional[str] = None, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
         known_permission = self.repository.get_permission(permission)
         if not known_permission or not known_permission.enabled:
             return AuthorizationResult(False, True, permission, user.id, reason="PERMISSION_NOT_FOUND")

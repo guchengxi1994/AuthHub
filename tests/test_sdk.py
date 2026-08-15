@@ -24,6 +24,15 @@ class ClientSdkTests(unittest.TestCase):
             client.list_users("user-token", query="张三", limit=50)
         request.assert_called_once_with("GET", "/api/users?query=%E5%BC%A0%E4%B8%89&limit=50", headers={"Authorization": "Bearer user-token"})
 
+        with patch.object(client, "_request", return_value={"results": []}) as request:
+            self.assertEqual(client.check_user_access("user-1", [{"id": "tool", "permission": "mcp:tool:execute"}]), {"results": []})
+        request.assert_called_once_with(
+            "POST",
+            "/api/service/users/user-1/access-checks",
+            {"checks": [{"id": "tool", "permission": "mcp:tool:execute"}]},
+            headers={},
+        )
+
     def test_manifest_uses_business_declared_mcp_tool_and_stable_code(self):
         manifest = ModuleManifest(
             module_id="knowledge",
@@ -174,6 +183,30 @@ class ClientSdkTests(unittest.TestCase):
             result = client.post("/api/auth/check-resource", headers={"Authorization": f"Bearer {token}"}, json={"permission": permission.code, "resource_id": resource.id, "external_id": "server-100"}).json()
             self.assertTrue(result["allowed"])
             self.assertEqual(result["matched_by"], "resource_grant")
+
+    def test_service_access_check_evaluates_a_recipient_without_their_token(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory(AuthHubSettings(module_registration_key="service-key"))
+        module = hub.register_module("mcp", "MCP")
+        resource = hub.create_resource(module.id, "mcp_tool", "tool", "MCP tools")
+        permission = hub.create_permission(None, "Execute tool", module_id=module.id, resource_id=resource.id, action="execute")
+        recipient = hub.create_user("recipient", "password")
+        instance = hub.register_resource_instance(resource.id, "orders:query")
+        app = create_app(auth_hub=hub)
+
+        payload = {"checks": [{"id": "orders-query", "permission": permission.code, "resource_id": resource.id, "external_id": instance.external_id}]}
+        with TestClient(app) as client:
+            headers = {"X-AuthHub-Registration-Key": "service-key"}
+            denied = client.post(f"/api/service/users/{recipient.id}/access-checks", headers=headers, json=payload)
+            self.assertEqual(denied.status_code, 200)
+            self.assertFalse(denied.json()["results"][0]["allowed"])
+
+            hub.replace_resource_instance_grants(instance.id, [{"user_id": recipient.id, "permission_codes": [permission.code]}])
+            allowed = client.post(f"/api/service/users/{recipient.id}/access-checks", headers=headers, json=payload)
+            self.assertEqual(allowed.status_code, 200)
+            self.assertTrue(allowed.json()["results"][0]["allowed"])
+            self.assertEqual(allowed.json()["results"][0]["matched_by"], "resource_grant")
 
     def test_resource_owner_can_share_by_external_id_without_admin_access(self):
         from auth_hub.api import create_app

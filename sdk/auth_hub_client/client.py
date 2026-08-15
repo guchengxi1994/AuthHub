@@ -173,6 +173,16 @@ class AuthHubClient:
         if not result.get("allowed"): raise AuthorizationDenied(permission, result.get("reason", "PERMISSION_DENIED"))
         return result
 
+    def check_user_access(self, user_id: str, checks: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        """Service-only batch check for a recipient's effective permissions."""
+        headers = {"X-AuthHub-Registration-Key": self.registration_key} if self.registration_key else {}
+        return self._request(
+            "POST",
+            f"/api/service/users/{quote(str(user_id), safe='')}/access-checks",
+            {"checks": [dict(item) for item in checks]},
+            headers=headers,
+        )
+
     def user_permissions(self, access_token: str) -> Mapping[str, Any]:
         return self._request("GET", "/api/auth/user-permissions", headers={"Authorization": f"Bearer {access_token}"})
 

@@ -89,6 +89,30 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
     @app.post("/api/auth/check-resource")
     async def check_resource(payload: Dict[str, Any], authorization: Optional[str] = Header(None)): return hub.can_access_resource(_bearer(authorization), str(payload.get("permission", "")), str(payload.get("resource_id", "")), str(payload.get("external_id", "")), context=payload.get("context")).to_dict()
 
+    @app.post("/api/service/users/{user_id}/access-checks")
+    async def service_user_access_checks(user_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):
+        """Service-only batch preflight for one user's global and instance permissions."""
+        _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
+        checks = payload.get("checks") or []
+        if not isinstance(checks, list) or not checks or len(checks) > 100:
+            raise ValidationError("checks must contain between 1 and 100 items")
+        results = []
+        for index, item in enumerate(checks):
+            if not isinstance(item, dict):
+                raise ValidationError("each access check must be an object")
+            check_id = str(item.get("id") or index)
+            permission = str(item.get("permission") or "")
+            resource_id = str(item.get("resource_id") or "")
+            external_id = str(item.get("external_id") or "")
+            if bool(resource_id) != bool(external_id):
+                raise ValidationError("resource_id and external_id must be supplied together")
+            result = (
+                hub.can_user_access_resource(user_id, permission, resource_id, external_id, context=item.get("context"))
+                if resource_id else hub.check_permission_for_user(user_id, permission, resource=item.get("resource"), context=item.get("context"))
+            )
+            results.append({"id": check_id, **result.to_dict()})
+        return {"user_id": user_id, "results": results}
+
     @app.post("/api/auth/check-token")
     async def check_token(authorization: Optional[str] = Header(None)): return hub.user_dict(hub.authenticate(_bearer(authorization)))
 
