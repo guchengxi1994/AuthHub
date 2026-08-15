@@ -17,7 +17,7 @@ except ImportError as error:  # pragma: no cover
     _FASTAPI_ERROR = error
 
 from .application import AuthHub, AuthHubSettings
-from .domain.errors import AuthHubError, AuthorizationError
+from .domain.errors import AuthHubError, AuthorizationError, NotFoundError, ValidationError
 from .ports.services import Cache
 from .version import VERSION, runtime_release
 
@@ -66,6 +66,19 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
 
     @app.get("/api/auth/me")
     async def me(authorization: Optional[str] = Header(None)): return hub.user_dict(hub.authenticate(_bearer(authorization)))
+
+    @app.get("/api/auth/users/resolve")
+    async def resolve_share_recipient(username: str, authorization: Optional[str] = Header(None)):
+        """Resolve one exact username for a resource-owner sharing workflow.
+
+        This deliberately does not expose a browsable user directory. The
+        caller must already know the AuthHub username of the intended recipient.
+        """
+        hub.authenticate(_bearer(authorization))
+        user = hub.repository.get_user_by_username(username.strip())
+        if not user or not user.enabled:
+            raise NotFoundError("user", username)
+        return _share_user_dict(user)
 
     @app.post("/api/auth/check")
     async def check(payload: Dict[str, Any], authorization: Optional[str] = Header(None)): return hub.check_permission(_bearer(authorization), str(payload.get("permission", "")), resource=payload.get("resource"), context=payload.get("context")).to_dict()
@@ -229,6 +242,25 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         _require_admin(hub, authorization)
         return {"items": [{**hub.resource_instance_dict(item), "grant_count": len(hub.resource_instance_grants(item.id))} for item in hub.repository.list_resource_instances(resource_id, owner_user_id=owner_user_id, organization_id=organization_id)]}
 
+    # Declare this static route before /{instance_id}/grants. Starlette matches
+    # routes in registration order and otherwise treats "by-external" as an ID.
+    @app.get("/api/resource-instances/by-external/grants")
+    async def list_owned_resource_instance_grants(resource_id: str, external_id: str, authorization: Optional[str] = Header(None)):
+        """Read grants for one record as its owner or a system administrator."""
+        _actor, instance = _require_resource_grant_manager(hub, authorization, resource_id, external_id)
+        return {"items": [_grant_with_user(hub, item) for item in hub.resource_instance_grants(instance.id)]}
+
+    @app.put("/api/resource-instances/by-external/grants")
+    async def replace_owned_resource_instance_grants(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
+        resource_id = str(payload.get("resource_id") or "")
+        external_id = str(payload.get("external_id") or "")
+        grants = payload.get("grants")
+        if not resource_id or not external_id: raise ValidationError("resource_id and external_id are required")
+        if not isinstance(grants, list): raise ValidationError("grants must be a list")
+        actor, instance = _require_resource_grant_manager(hub, authorization, resource_id, external_id)
+        stored = hub.replace_resource_instance_grants(instance.id, grants, actor_id=actor.id)
+        return {"items": [_grant_with_user(hub, item) for item in stored]}
+
     @app.get("/api/resource-instances/{instance_id}/grants")
     async def list_resource_instance_grants(instance_id: str, authorization: Optional[str] = Header(None)):
         _require_admin(hub, authorization)
@@ -283,6 +315,29 @@ def _require_admin(hub: AuthHub, authorization: Optional[str]):
     if not actor.is_super_admin:
         raise AuthorizationError("SYSTEM_ADMIN_REQUIRED")
     return actor
+
+
+def _require_resource_grant_manager(hub: AuthHub, authorization: Optional[str], resource_id: str, external_id: str):
+    """Allow a system administrator or the exact record owner to manage grants."""
+    actor = hub.authenticate(_bearer(authorization))
+    instance = hub.repository.get_resource_instance_by_external_id(resource_id, external_id)
+    if not instance:
+        raise NotFoundError("resource_instance", f"{resource_id}:{external_id}")
+    if actor.is_super_admin or instance.owner_user_id == actor.id:
+        return actor, instance
+    raise AuthorizationError("PERMISSION_DENIED", "only the resource owner may manage grants")
+
+
+def _share_user_dict(user: Any) -> Dict[str, str]:
+    return {"id": user.id, "username": user.username, "display_name": user.display_name}
+
+
+def _grant_with_user(hub: AuthHub, grant: Any) -> Dict[str, Any]:
+    value = hub.resource_instance_grant_dict(grant)
+    user = hub.repository.get_user(grant.user_id)
+    if user:
+        value["user"] = _share_user_dict(user)
+    return value
 
 
 def _module_registrar_actor(hub: AuthHub, authorization: Optional[str], registration_key: Optional[str]) -> str:

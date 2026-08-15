@@ -162,10 +162,13 @@ class AuthHubClient:
         if not result.get("allowed"): raise AuthorizationDenied(permission, result.get("reason", "PERMISSION_DENIED"))
         return result
 
-    def check_resource_or_raise(self, access_token: str, permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
+    def check_resource(self, access_token: str, permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
         payload: Dict[str, Any] = {"permission": permission, "resource_id": resource_id, "external_id": external_id}
         if context is not None: payload["context"] = dict(context)
-        result = self._request("POST", "/api/auth/check-resource", payload, headers={"Authorization": f"Bearer {access_token}"})
+        return self._request("POST", "/api/auth/check-resource", payload, headers={"Authorization": f"Bearer {access_token}"})
+
+    def check_resource_or_raise(self, access_token: str, permission: str, resource_id: str, external_id: str, *, context: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
+        result = self.check_resource(access_token, permission, resource_id, external_id, context=context)
         if not result.get("authenticated"): raise AuthHubClientError("authentication required", code=result.get("reason"), status_code=401)
         if not result.get("allowed"): raise AuthorizationDenied(permission, result.get("reason", "PERMISSION_DENIED"))
         return result
@@ -194,6 +197,25 @@ class AuthHubClient:
     def replace_resource_instance_grants(self, access_token: str, instance_id: str, grants: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
         """Replace explicit per-record grants. This is an administrator API."""
         return self._request("PUT", f"/api/resource-instances/{quote(str(instance_id), safe='')}/grants", {"grants": [dict(item) for item in grants]}, headers={"Authorization": f"Bearer {access_token}"})
+
+    def resolve_user(self, access_token: str, username: str) -> Mapping[str, Any]:
+        """Resolve one exact AuthHub username for a sharing recipient."""
+        path = f"/api/auth/users/resolve?{urlencode({'username': username})}"
+        return self._request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
+
+    def resource_instance_grants_by_external_id(self, access_token: str, resource_id: str, external_id: str) -> Mapping[str, Any]:
+        """Read one resource's grants as its owner or a system administrator."""
+        path = f"/api/resource-instances/by-external/grants?{urlencode({'resource_id': resource_id, 'external_id': external_id})}"
+        return self._request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
+
+    def replace_resource_instance_grants_by_external_id(self, access_token: str, resource_id: str, external_id: str, grants: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        """Replace one owned resource's explicit grants without exposing its internal ID."""
+        return self._request(
+            "PUT",
+            "/api/resource-instances/by-external/grants",
+            {"resource_id": resource_id, "external_id": external_id, "grants": [dict(item) for item in grants]},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
 
     def _request(self, method: str, path: str, payload: Optional[Mapping[str, Any]] = None, *, headers: Optional[Mapping[str, str]] = None) -> Mapping[str, Any]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
