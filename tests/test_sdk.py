@@ -186,6 +186,13 @@ class ClientSdkTests(unittest.TestCase):
             resolved = client.get("/api/auth/users/resolve", params={"username": "skill-user"}, headers=headers)
             self.assertEqual(resolved.status_code, 200)
             self.assertEqual(resolved.json()["id"], recipient.id)
+            denied_grant = client.put(
+                "/api/resource-instances/by-external/grants",
+                headers=headers,
+                json={"resource_id": resource.id, "external_id": "customer-summary", "grants": [{"user_id": recipient.id, "permission_codes": [permission.code]}]},
+            )
+            self.assertEqual(denied_grant.status_code, 403)
+            hub.assign_permission(share_role.id, permission.code)
             response = client.put(
                 "/api/resource-instances/by-external/grants",
                 headers=headers,

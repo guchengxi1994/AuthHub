@@ -268,6 +268,7 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         if not resource_id or not external_id: raise ValidationError("resource_id and external_id are required")
         if not isinstance(grants, list): raise ValidationError("grants must be a list")
         actor, instance = _require_resource_grant_manager(hub, authorization, resource_id, external_id)
+        _require_delegable_resource_grants(hub, actor, instance, grants)
         stored = hub.replace_resource_instance_grants(instance.id, grants, actor_id=actor.id)
         return {"items": [_grant_with_user(hub, item) for item in stored]}
 
@@ -281,15 +282,8 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         actor = _require_system_permission(hub, authorization, "entity", "resource-instances", "update")
         grants = payload.get("grants")
         if not isinstance(grants, list): raise ValidationError("grants must be a list")
-        if not actor.is_super_admin:
-            for grant in grants:
-                if not isinstance(grant, dict):
-                    continue
-                permission_codes = grant.get("permission_codes") or grant.get("permissions") or []
-                if isinstance(permission_codes, str):
-                    permission_codes = [permission_codes]
-                for permission_code in permission_codes:
-                    _require_assignable_permission(hub, actor, str(permission_code))
+        instance = hub.resource_instance(instance_id)
+        _require_delegable_resource_grants(hub, actor, instance, grants)
         return {"items": [hub.resource_instance_grant_dict(item) for item in hub.replace_resource_instance_grants(instance_id, grants, actor_id=actor.id)]}
 
     @app.post("/api/resource-instances")
@@ -387,6 +381,27 @@ def _require_assignable_permission(hub: AuthHub, actor: Any, permission_code: st
     if not actor.is_super_admin and permission.code not in set(hub.user_permissions(actor.id)):
         raise AuthorizationError("PERMISSION_DENIED", "cannot delegate a permission you do not hold")
     return permission
+
+
+def _require_delegable_resource_grants(hub: AuthHub, actor: Any, instance: Any, grants: list[Dict[str, Any]]) -> None:
+    """Only new grants are delegated; unchanged grants may be retained safely."""
+    if actor.is_super_admin:
+        return
+    existing = {
+        (grant.user_id, grant.permission_code)
+        for grant in hub.resource_instance_grants(instance.id)
+    }
+    for grant in grants:
+        if not isinstance(grant, dict):
+            continue
+        user_id = str(grant.get("user_id") or "")
+        permission_codes = grant.get("permission_codes") or grant.get("permissions") or []
+        if isinstance(permission_codes, str):
+            permission_codes = [permission_codes]
+        for permission_code in permission_codes:
+            pair = (user_id, str(permission_code))
+            if pair not in existing:
+                _require_assignable_permission(hub, actor, pair[1])
 
 
 def _require_resource_grant_manager(hub: AuthHub, authorization: Optional[str], resource_id: str, external_id: str):
