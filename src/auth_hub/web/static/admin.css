@@ -60,6 +60,9 @@ textarea.field { height: auto; min-height: 84px; padding: .65rem .7rem; line-hei
 .permission-module-group > summary::-webkit-details-marker, .permission-group-heading::-webkit-details-marker, .permission-directory-module > summary::-webkit-details-marker, .permission-directory-group summary::-webkit-details-marker { display: none; }
 .permission-module-group > summary > span { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .permission-module-group > summary > small { flex: none; color: #64748b; font-size: 11px; }
+.permission-module-select { display: inline-flex; align-items: center; gap: .3rem; flex: none; border-radius: 5px; padding: .2rem .35rem; color: #475569; font-size: 11px; font-weight: 600; cursor: pointer; }
+.permission-module-select:hover { background: #eaf2fd; color: #1e62bc; }
+.permission-module-select input { width: 13px; height: 13px; margin: 0; accent-color: #2873d3; }
 .permission-module-group > summary > svg, .permission-group-meta > svg, .permission-directory-module > summary > svg, .permission-directory-group summary > div:last-child > svg { width: 15px; height: 15px; flex: none; color: #94a3b8; transition: transform .15s ease; }
 .permission-module-group[open] > summary > svg, .permission-group[open] .permission-group-meta > svg, .permission-directory-module[open] > summary > svg, .permission-directory-group[open] summary > div:last-child > svg { transform: rotate(180deg); }
 .permission-group { border-bottom: 1px solid #e7edf4; }

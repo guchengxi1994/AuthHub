@@ -2,6 +2,13 @@
 
 All notable changes to AuthHub are documented in this file.
 
+## [0.5.1] - 2026-08-17
+
+### Fixed
+
+- Add module-level select-all controls to role and record permission selectors.
+- Fix resource-level select-all so native checkbox state correctly propagates to every enabled permission and keeps module/resource counts synchronized.
+
 ## [0.5.0] - 2026-08-17
 
 ### Added

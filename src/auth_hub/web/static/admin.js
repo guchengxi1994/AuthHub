@@ -206,7 +206,10 @@ function permissionOptions(groups, inputName, selectedCodes = new Set()) {
       const hasSelectedPermission = module.groups.some(group => group.permissions.some(permission => selectedCodes.has(permission.code)));
       const resourceCount = module.groups.length;
       const modulePermissionCount = module.groups.reduce((count, group) => count + group.permissions.length, 0);
-      return `<details class="permission-module-group" data-permission-module-group ${hasSelectedPermission ? 'open' : ''}><summary><span>${esc(module.name)}</span><small>${resourceCount} 个资源 · ${modulePermissionCount} 项</small><i data-lucide="chevron-down" aria-hidden="true"></i></summary><div>${module.groups.map(renderResource).join('')}</div></details>`;
+      const moduleEnabledCount = module.groups.reduce((count, group) => count + group.permissions.filter(permission => permission.enabled).length, 0);
+      const moduleSelectedCount = module.groups.reduce((count, group) => count + group.permissions.filter(permission => permission.enabled && selectedCodes.has(permission.code)).length, 0);
+      const moduleFullySelected = moduleEnabledCount > 0 && moduleSelectedCount === moduleEnabledCount;
+      return `<details class="permission-module-group" data-permission-module-group data-permission-resource-count="${resourceCount}" ${hasSelectedPermission ? 'open' : ''}><summary><span>${esc(module.name)}</span><small data-permission-module-selected>${moduleSelectedCount} / ${moduleEnabledCount} 项 · ${resourceCount} 个资源</small><label class="permission-module-select" title="选择此模块的全部启用权限"><input type="checkbox" data-permission-module-select ${moduleFullySelected ? 'checked' : ''} ${moduleEnabledCount ? '' : 'disabled'}><span>全选</span></label><i data-lucide="chevron-down" aria-hidden="true"></i></summary><div>${module.groups.map(renderResource).join('')}</div></details>`;
     }).join('')}</section>`;
   }).join('');
 }
@@ -224,6 +227,16 @@ function updatePermissionGroupSelection(root, inputName) {
     const selectedEnabledCount = enabledPermissions.filter(input => input.checked).length;
     $('[data-permission-group-selected]', group).textContent = `${selectedCount} / ${permissions.length}`;
     const control = $('[data-permission-group-select]', group);
+    control.checked = enabledPermissions.length > 0 && selectedEnabledCount === enabledPermissions.length;
+    control.indeterminate = selectedEnabledCount > 0 && selectedEnabledCount < enabledPermissions.length;
+  });
+  $$('[data-permission-module-group]', root).forEach(module => {
+    const permissions = $$(`input[name="${inputName}"]`, module);
+    const enabledPermissions = permissions.filter(input => !input.disabled);
+    const selectedEnabledCount = enabledPermissions.filter(input => input.checked).length;
+    const control = $('[data-permission-module-select]', module);
+    const resourceCount = module.dataset.permissionResourceCount || '0';
+    $('[data-permission-module-selected]', module).textContent = `${selectedEnabledCount} / ${enabledPermissions.length} 项 · ${resourceCount} 个资源`;
     control.checked = enabledPermissions.length > 0 && selectedEnabledCount === enabledPermissions.length;
     control.indeterminate = selectedEnabledCount > 0 && selectedEnabledCount < enabledPermissions.length;
   });
@@ -245,13 +258,17 @@ function bindSelectionToolbar(root, inputName, onChange = () => {}) {
   });
   $$('[data-permission-group-select]', root).forEach(control => {
     control.onclick = event => {
-      event.preventDefault();
       event.stopPropagation();
-      control.checked = !control.checked;
-      control.dispatchEvent(new Event('change'));
     };
     control.onchange = () => {
       $$(`input[name="${inputName}"]`, control.closest('[data-permission-group]')).filter(input => !input.disabled).forEach(input => { input.checked = control.checked; });
+      update();
+    };
+  });
+  $$('[data-permission-module-select]', root).forEach(control => {
+    control.onclick = event => { event.stopPropagation(); };
+    control.onchange = () => {
+      $$(`input[name="${inputName}"]`, control.closest('[data-permission-module-group]')).filter(input => !input.disabled).forEach(input => { input.checked = control.checked; });
       update();
     };
   });
