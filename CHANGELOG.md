@@ -2,6 +2,20 @@
 
 All notable changes to AuthHub are documented in this file.
 
+## [0.5.3] - 2026-08-17
+
+### Added
+
+- Add client-side business-resource filters for resource name or key, module, permission category, and resource type, with a result count and reset action.
+
+## [0.5.2] - 2026-08-17
+
+### Changed
+
+- Rename record-level authorization controls in the management console to distinguish all-user access from selected-user authorization.
+- Explain that all-user access bypasses role and record-scope checks, while selected-user authorization affects only one user and one record without changing roles or all-user access.
+- Present all-user operations as available to all signed-in users instead of showing their underlying owner/organization scope labels.
+
 ## [0.5.1] - 2026-08-17
 
 ### Fixed
