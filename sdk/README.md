@@ -111,6 +111,25 @@ authz = client.check_resource_or_raise(
 
 `manifest.resource_id("order")` derives `knowledge:entity:order` from the declared module and resource; application code should not hardcode it. Set `PermissionSpec(..., scope="owner")` or `scope="organization"` only for `entity` or `custom` resources. `global` skips instance ownership checks.
 
+New business-data records publicly expose their enabled `view`/`read` permissions to authenticated AuthHub users by default. The record owner or an administrator can set an explicit public permission list through the SDK; an empty list makes the record private, and `None` restores the default:
+
+```python
+client.replace_resource_instance_public_permissions(
+    access_token,
+    manifest.resource_id("order"),
+    str(order.id),
+    [],  # private: rely on role scope and per-record sharing only
+)
+
+# Restore default public view/read permissions later.
+client.replace_resource_instance_public_permissions(
+    access_token,
+    manifest.resource_id("order"),
+    str(order.id),
+    None,
+)
+```
+
 AuthHub administrators may additionally share one registered business data record with one user in the management console. Such a record grant is evaluated by the same `check_resource_or_raise()` call and applies only to that external record; it does not assign a global role or change the business database. Keep the record-level route dependency in place even when a frontend has rendered a sharing control.
 
 The business database remains the source of truth. Create/update the business record first and then call the idempotent registration method; after deleting the business record, call `client.unregister_resource_instance(manifest.resource_id("order"), str(order.id))`. AuthHub never deletes business records and deliberately rejects deleting a resource definition or module while instance indexes remain.

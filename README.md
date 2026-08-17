@@ -43,7 +43,7 @@ AuthHub 管理权限：管理 AuthHub 本身
 
 ### 业务系统数据权限
 
-`entity` 和 `custom` 属于业务系统数据权限，例如订单、文档、项目、资产或其他需要逐条控制的业务对象。它们可以使用 `global`、`owner`、`organization` 范围；只有这类资源能由业务系统登记数据记录，并支持把某一条记录分享给指定用户。
+`entity` 和 `custom` 属于业务系统数据权限，例如订单、文档、项目、资产或其他需要逐条控制的业务对象。它们可以使用 `global`、`owner`、`organization` 范围；只有这类资源能由业务系统登记数据记录，并支持把某一条记录分享给指定用户或配置其公开操作。新登记的数据记录默认对所有已认证用户公开其启用的 `view`/`read` 数据权限；业务 owner 或系统管理员可以将其设为私有，或改为其他公开操作。
 
 数据权限不替代操作权限。更新订单等请求通常需要同时满足：调用更新接口的操作权限，以及该订单记录的 `update` 数据权限。角色表示“原则上能做什么”，归属、组织范围和逐记录分享决定“能否操作这一条数据”。
 
@@ -126,6 +126,8 @@ docker compose up --build
 - `POST /api/resource-instances`、`DELETE /api/resource-instances?resource_id=...&external_id=...`：业务服务幂等登记/注销业务数据记录的外部 ID、用户归属和组织归属
 - `GET`、`PUT /api/resource-instances/{instance_id}/grants`：系统管理员查看或替换一个业务数据记录的用户分享
 - `GET`、`PUT /api/resource-instances/by-external/grants`：记录 owner 或系统管理员按 `resource_id + external_id` 查看或替换该记录分享，不暴露内部实例 ID
+- `GET`、`PUT /api/resource-instances/{instance_id}/public-permissions`：系统管理员查看或替换一条记录的公开操作
+- `GET`、`PUT /api/resource-instances/by-external/public-permissions`：记录 owner 或系统管理员按外部 ID 配置公开操作；省略配置时默认公开 `view`/`read`，提交空数组则设为私有，提交 `null` 恢复默认
 - `GET /api/auth/users/resolve?username=...`：持有 `authhub:custom:share-recipient:read` 的用户按精确用户名解析一个可授权对象；不提供可枚举的用户目录
 - `POST /api/permissions`：创建资源操作权限，并可同时授予角色
 
@@ -161,7 +163,7 @@ hub = AuthHub(repository, redis_cache, token_service, password_hasher, audit_log
 }
 ```
 
-只有业务数据权限可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先检查角色权限，再检查此数据记录的归属。系统超级管理员对已存在的数据记录始终允许操作。业务数据库仍是订单、文档等字段的唯一真相源。
+只有业务数据权限可选 `global`、`owner`、`organization`。业务后端调用 `POST /api/auth/check-resource` 或 Python SDK 的 `check_resource_or_raise()` 时，AuthHub 先允许系统超级管理员，然后依次判断该记录的公开操作、逐记录分享和角色权限及其归属范围。公开不意味着匿名访问，调用者仍须提供有效的 AuthHub Token。业务数据库仍是订单、文档等字段的唯一真相源。
 
 对于临时协作或单条数据记录的例外访问，系统管理员可以在管理端“数据记录与分享”中为指定用户授予该记录所属数据资源的具体操作权限。业务系统也可以基于 `by-external/grants` 让该记录的 owner 管理自身记录的分享用户。这个授权只对一个 `resource_id + external_id` 生效，不会修改用户角色，也不会扩展到同类型的其他记录；在 `check-resource` 中命中时结果为 `matched_by: "resource_grant"`。角色仍是默认的批量授权方式，记录分享只用于明确的数据级例外。
 

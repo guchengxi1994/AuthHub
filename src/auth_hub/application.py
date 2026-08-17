@@ -23,6 +23,7 @@ RESOURCE_ACTIONS = {
     "custom": frozenset({"view", "read", "create", "update", "delete", "execute", "manage"}),
 }
 RESOURCE_SCOPES = frozenset({"global", "owner", "organization"})
+DEFAULT_PUBLIC_ACTIONS = frozenset({"view", "read"})
 PERMISSION_CATEGORY_AUTHHUB_ADMIN = "authhub_admin"
 PERMISSION_CATEGORY_BUSINESS_OPERATION = "business_operation"
 PERMISSION_CATEGORY_BUSINESS_DATA = "business_data"
@@ -380,7 +381,17 @@ class AuthHub:
             raise ValidationError("resource instances are only supported for business data resources")
         if not external_id: raise ValidationError("external_id is required")
         existing = self.repository.get_resource_instance_by_external_id(resource_id, external_id)
-        resolved_owner = existing.owner_user_id if owner_user_id is _UNSET and existing else (None if owner_user_id is _UNSET else owner_user_id)
+        if owner_user_id is _UNSET:
+            if existing:
+                resolved_owner = existing.owner_user_id
+            else:
+                # A direct user-authenticated registration should retain its
+                # creator as owner. Service registrations still provide the
+                # owner explicitly because their actor is not a user.
+                creator = self.repository.get_user(str(actor_id)) if actor_id else None
+                resolved_owner = creator.id if creator else None
+        else:
+            resolved_owner = owner_user_id
         resolved_org = existing.organization_id if organization_id is _UNSET and existing else (None if organization_id is _UNSET else organization_id)
         resolved_metadata = dict(existing.metadata) if metadata is _UNSET and existing else ({} if metadata is _UNSET else dict(metadata or {}))
         if resolved_owner: self._user_or_raise(str(resolved_owner))
@@ -442,6 +453,56 @@ class AuthHub:
         for user_id, _ in normalized: self.invalidate_user_permissions(user_id)
         self._audit("resource.instance.grants.replace", actor_id, "resource_instance", instance.id, "success", {"grant_count": len(stored)})
         return stored
+
+    def resource_instance_public_permission_codes(self, instance_id: str) -> List[str]:
+        """Return effective public permissions for one business record.
+
+        Missing configuration uses the safe default of public ``view``/``read``
+        operations. An explicit empty list makes the record private.
+        """
+        instance = self.resource_instance(instance_id)
+        configured = instance.metadata.get("public_permission_codes", None)
+        if configured is not None:
+            # Metadata is user/application supplied JSON. Treat malformed
+            # legacy values as an unset configuration instead of iterating a
+            # string character-by-character during authorization.
+            if not isinstance(configured, (list, tuple, set)):
+                configured = None
+            else:
+                return sorted({str(code) for code in configured if str(code)})
+        return sorted(
+            permission.code
+            for permission in self.repository.list_permissions()
+            if permission.enabled
+            and permission.metadata.get("resource_id") == instance.resource_id
+            and permission.metadata.get("action") in DEFAULT_PUBLIC_ACTIONS
+        )
+
+    def replace_resource_instance_public_permissions(self, instance_id: str, permission_codes: Optional[Sequence[str]], *, actor_id: str) -> ResourceInstance:
+        """Change public operations; only the owner or a system admin may do so."""
+        instance = self.resource_instance(instance_id)
+        actor = self._user_or_raise(actor_id)
+        if not actor.is_super_admin and instance.owner_user_id != actor.id:
+            raise AuthorizationError("RESOURCE_PUBLIC_PERMISSION_ADMIN_REQUIRED")
+        metadata = dict(instance.metadata)
+        if permission_codes is None:
+            metadata.pop("public_permission_codes", None)
+        else:
+            if isinstance(permission_codes, (str, bytes)):
+                raise ValidationError("permission_codes must be a sequence of permission codes or null")
+            normalized = sorted({str(code) for code in permission_codes if str(code)})
+            for code in normalized:
+                permission = self.repository.get_permission(code)
+                if not permission or not permission.enabled:
+                    raise NotFoundError("permission", code)
+                if permission.metadata.get("resource_id") != instance.resource_id:
+                    raise ValidationError("public permission must belong to the resource instance definition")
+                if _permission_category(permission) != PERMISSION_CATEGORY_BUSINESS_DATA:
+                    raise ValidationError("public permissions require a business data permission")
+            metadata["public_permission_codes"] = normalized
+        updated = self.repository.save_resource_instance(instance.with_changes(metadata=metadata))
+        self._audit("resource.instance.public_permissions.replace", actor.id, "resource_instance", instance.id, "success", {"permission_codes": self.resource_instance_public_permission_codes(instance.id)})
+        return updated
 
     def can_access_resource_instance(self, access_token: Optional[str], permission: str, instance_id: str, *, context: Optional[Mapping[str, Any]] = None) -> AuthorizationResult:
         instance = self.resource_instance(instance_id)
@@ -537,6 +598,10 @@ class AuthHub:
         if instance_id and expected_resource_id and (not instance or instance.resource_id != expected_resource_id):
             result = AuthorizationResult(False, True, permission, user.id, reason="RESOURCE_INSTANCE_NOT_FOUND")
             self._audit("authorization.check", user.id, "permission", permission, "denied", {"resource": resource, "context": dict(context or {})})
+            return result
+        if instance and _permission_category(known_permission) == PERMISSION_CATEGORY_BUSINESS_DATA and permission in self.resource_instance_public_permission_codes(instance.id):
+            result = AuthorizationResult(True, True, permission, user.id, matched_by="resource_public")
+            self._audit("authorization.check", user.id, "permission", permission, "allowed", {"resource": resource, "context": dict(context or {})})
             return result
         if instance and _permission_category(known_permission) == PERMISSION_CATEGORY_BUSINESS_DATA and self.repository.has_resource_instance_grant(instance.id, user.id, permission):
             result = AuthorizationResult(True, True, permission, user.id, matched_by="resource_grant")
@@ -729,7 +794,10 @@ class AuthHub:
     @staticmethod
     def permission_dict(permission: Permission) -> Dict[str, Any]: return {"id": permission.id, "code": permission.code, "name": permission.name, "module_id": permission.module_id, "resource_id": permission.metadata.get("resource_id"), "resource_type": permission.metadata.get("resource_type"), "resource_key": permission.metadata.get("resource_key"), "action": permission.metadata.get("action"), "scope": permission.metadata.get("scope", "global"), "permission_category": _permission_category(permission), "description": permission.description, "kind": permission.kind, "enabled": permission.enabled, "metadata": dict(permission.metadata)}
     @staticmethod
-    def resource_instance_dict(instance: ResourceInstance) -> Dict[str, Any]: return {"id": instance.id, "resource_id": instance.resource_id, "external_id": instance.external_id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, "metadata": dict(instance.metadata), "created_at": instance.created_at.isoformat(), "updated_at": instance.updated_at.isoformat()}
+    def resource_instance_dict(instance: ResourceInstance) -> Dict[str, Any]:
+        configured = instance.metadata.get("public_permission_codes", None)
+        configured_values = configured if isinstance(configured, (list, tuple, set)) else []
+        return {"id": instance.id, "resource_id": instance.resource_id, "external_id": instance.external_id, "owner_user_id": instance.owner_user_id, "organization_id": instance.organization_id, "metadata": dict(instance.metadata), "public_permission_configured": isinstance(configured, (list, tuple, set)), "public_permission_codes": sorted({str(code) for code in configured_values if str(code)}), "created_at": instance.created_at.isoformat(), "updated_at": instance.updated_at.isoformat()}
     @staticmethod
     def resource_instance_grant_dict(grant: ResourceInstanceGrant) -> Dict[str, Any]: return {"id": grant.id, "resource_instance_id": grant.resource_instance_id, "user_id": grant.user_id, "permission_code": grant.permission_code, "created_at": grant.created_at.isoformat()}
     @staticmethod

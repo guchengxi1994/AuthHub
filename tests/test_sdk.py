@@ -15,6 +15,21 @@ from auth_hub_client import AuthHubClient, AuthHubOutbox, AuthHubOutboxDispatche
 
 
 class ClientSdkTests(unittest.TestCase):
+    def test_client_public_permission_methods_use_expected_admin_routes(self):
+        client = AuthHubClient("http://auth-hub")
+        with patch.object(client, "_request", return_value={}) as request:
+            client.resource_instance_public_permissions_by_id("admin-token", "instance/1")
+        request.assert_called_once_with("GET", "/api/resource-instances/instance%2F1/public-permissions", headers={"Authorization": "Bearer admin-token"})
+
+        with patch.object(client, "_request", return_value={}) as request:
+            client.replace_resource_instance_public_permissions_by_id("admin-token", "instance/1", None)
+        request.assert_called_once_with(
+            "PUT",
+            "/api/resource-instances/instance%2F1/public-permissions",
+            {"permission_codes": None},
+            headers={"Authorization": "Bearer admin-token"},
+        )
+
     def test_client_lists_users_with_caller_token(self):
         client = AuthHubClient("http://auth-hub")
         with patch.object(client, "_request", return_value={"items": []}) as request:
@@ -234,7 +249,7 @@ class ClientSdkTests(unittest.TestCase):
         resource = hub.create_resource(module.id, "entity", "order", "Orders")
         permission = hub.create_permission(None, "Read order", module_id=module.id, resource_id=resource.id, action="read")
         recipient = hub.create_user("recipient", "password")
-        instance = hub.register_resource_instance(resource.id, "order-100")
+        instance = hub.register_resource_instance(resource.id, "order-100", metadata={"public_permission_codes": []})
         app = create_app(auth_hub=hub)
 
         payload = {"checks": [{"id": "order-100", "permission": permission.code, "resource_id": resource.id, "external_id": instance.external_id}]}
@@ -295,6 +310,84 @@ class ClientSdkTests(unittest.TestCase):
             result = client.post("/api/auth/check-resource", headers={"Authorization": f"Bearer {recipient_token}"}, json={"permission": permission.code, "resource_id": resource.id, "external_id": "customer-summary"}).json()
             self.assertTrue(result["allowed"])
             self.assertEqual(result["matched_by"], "resource_grant")
+
+    def test_resource_owner_can_configure_public_permissions_by_external_id(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory()
+        module = hub.register_module("documents", "Documents")
+        resource = hub.create_resource(module.id, "custom", "document", "Documents")
+        view = hub.create_permission(None, "View document", module_id=module.id, resource_id=resource.id, action="view")
+        execute = hub.create_permission(None, "Execute document", module_id=module.id, resource_id=resource.id, action="execute")
+        owner = hub.create_user("public-owner", "password")
+        reader = hub.create_user("public-reader", "password")
+        outsider = hub.create_user("public-outsider", "password")
+        instance = hub.register_resource_instance(resource.id, "document-200", owner_user_id=owner.id)
+        app = create_app(auth_hub=hub)
+
+        with TestClient(app) as client:
+            owner_token = client.post("/api/auth/login", json={"username": "public-owner", "password": "password"}).json()["access_token"]
+            reader_token = client.post("/api/auth/login", json={"username": "public-reader", "password": "password"}).json()["access_token"]
+            outsider_token = client.post("/api/auth/login", json={"username": "public-outsider", "password": "password"}).json()["access_token"]
+            admin_token = client.post("/api/auth/login", json={"username": "admin", "password": "change-me-now"}).json()["access_token"]
+            owner_headers = {"Authorization": f"Bearer {owner_token}"}
+
+            defaulted = client.get(
+                "/api/resource-instances/by-external/public-permissions",
+                params={"resource_id": resource.id, "external_id": instance.external_id},
+                headers=owner_headers,
+            )
+            self.assertEqual(defaulted.status_code, 200)
+            self.assertFalse(defaulted.json()["configured"])
+            self.assertEqual(defaulted.json()["selected_permission_codes"], [view.code])
+
+            denied = client.put(
+                "/api/resource-instances/by-external/public-permissions",
+                headers={"Authorization": f"Bearer {outsider_token}"},
+                json={"resource_id": resource.id, "external_id": instance.external_id, "permission_codes": [execute.code]},
+            )
+            self.assertEqual(denied.status_code, 403)
+
+            private = client.put(
+                "/api/resource-instances/by-external/public-permissions",
+                headers=owner_headers,
+                json={"resource_id": resource.id, "external_id": instance.external_id, "permission_codes": []},
+            )
+            self.assertEqual(private.status_code, 200)
+            self.assertTrue(private.json()["configured"])
+            self.assertEqual(private.json()["selected_permission_codes"], [])
+            view_check = client.post(
+                "/api/auth/check-resource",
+                headers={"Authorization": f"Bearer {reader_token}"},
+                json={"permission": view.code, "resource_id": resource.id, "external_id": instance.external_id},
+            )
+            self.assertFalse(view_check.json()["allowed"])
+
+            custom = client.put(
+                "/api/resource-instances/by-external/public-permissions",
+                headers=owner_headers,
+                json={"resource_id": resource.id, "external_id": instance.external_id, "permission_codes": [execute.code]},
+            )
+            self.assertEqual(custom.status_code, 200)
+            execute_check = client.post(
+                "/api/auth/check-resource",
+                headers={"Authorization": f"Bearer {reader_token}"},
+                json={"permission": execute.code, "resource_id": resource.id, "external_id": instance.external_id},
+            )
+            self.assertTrue(execute_check.json()["allowed"])
+            self.assertEqual(execute_check.json()["matched_by"], "resource_public")
+
+            restored = client.put(
+                "/api/resource-instances/by-external/public-permissions",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                json={"resource_id": resource.id, "external_id": instance.external_id, "permission_codes": None},
+            )
+            self.assertEqual(restored.status_code, 200)
+            self.assertFalse(restored.json()["configured"])
+            self.assertEqual(restored.json()["selected_permission_codes"], [view.code])
+
+            admin_by_id = client.get(f"/api/resource-instances/{instance.id}/public-permissions", headers=owner_headers)
+            self.assertEqual(admin_by_id.status_code, 403)
 
     def test_sqlalchemy_outbox_decorator_is_transactional_and_dispatches_idempotently(self):
         from sqlalchemy import create_engine, select

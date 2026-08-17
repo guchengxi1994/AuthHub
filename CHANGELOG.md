@@ -2,6 +2,19 @@
 
 All notable changes to AuthHub are documented in this file.
 
+## [0.5.0] - 2026-08-17
+
+### Added
+
+- Make newly registered business-data records publicly accessible for enabled `view`/`read` permissions by default, with an explicit empty list for private records and `null` to restore the default.
+- Allow a record owner or system administrator to configure public operations through external-ID and internal-ID APIs, with matching Python SDK methods.
+- Display and edit record-level public operations in the management console.
+
+### Changed
+
+- Preserve the authenticated creator as the owner when a direct user registration omits `owner_user_id`; service/outbox registrations can continue to provide ownership explicitly.
+- Harden public-permission metadata parsing and synchronize framework, client SDK, React SDK, and static asset versions to `0.5.0`.
+
 ## [0.4.0] - 2026-08-15
 
 ### Added

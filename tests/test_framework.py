@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from auth_hub import AuthHub, AuthHubSettings, InMemoryAuthHubRepository, InMemoryAuditLog, InMemoryCache, RedisCache, SQLAlchemyAuthHubRepository
-from auth_hub.domain.errors import AuthenticationError, ValidationError
+from auth_hub.domain.errors import AuthenticationError, AuthorizationError, ValidationError
 from auth_hub.infrastructure import CacheTokenService, InMemoryTokenService, SimplePasswordHasher
 from auth_hub.domain.models import Permission, Role, User, new_id
 
@@ -158,7 +158,7 @@ class FrameworkTests(unittest.TestCase):
         permission = hub.create_permission(None, "Read organization dataset", module_id=module.id, resource_id=resource.id, action="read", scope="organization", role_ids=[role.id])
         hub.create_user("engineer", "password", organization_ids=[engineering.id], role_ids=[role.id])
         hub.create_user("seller", "password", organization_ids=[sales.id], role_ids=[role.id])
-        instance = hub.register_resource_instance(resource.id, "dataset-100", organization_id=engineering.id)
+        instance = hub.register_resource_instance(resource.id, "dataset-100", organization_id=engineering.id, metadata={"public_permission_codes": []})
         engineer_token = hub.login("engineer", "password")["access_token"]
         seller_token = hub.login("seller", "password")["access_token"]
         self.assertTrue(hub.can_access_resource_instance(engineer_token, permission.code, instance.id).allowed)
@@ -184,6 +184,40 @@ class FrameworkTests(unittest.TestCase):
         self.assertEqual(result.matched_by, "resource_grant")
         with self.assertRaises(ValidationError):
             hub.replace_resource_instance_grants(instance.id, [{"user_id": collaborator.id, "permission_codes": [update_project.code]}])
+
+    def test_resource_instance_is_public_for_view_by_default_and_owner_can_change_public_operations(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("documents", "Documents")
+        resource = hub.create_resource(module.id, "custom", "document", "Documents")
+        view = hub.create_permission(None, "View document", module_id=module.id, resource_id=resource.id, action="view")
+        execute = hub.create_permission(None, "Execute document", module_id=module.id, resource_id=resource.id, action="execute")
+        owner = hub.create_user("owner", "password")
+        reader = hub.create_user("reader", "password")
+        instance = hub.register_resource_instance(resource.id, "document-100", owner_user_id=owner.id)
+        reader_token = hub.login("reader", "password")["access_token"]
+        owner_token = hub.login("owner", "password")["access_token"]
+
+        result = hub.can_access_resource_instance(reader_token, view.code, instance.id)
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.matched_by, "resource_public")
+        self.assertFalse(hub.can_access_resource_instance(reader_token, execute.code, instance.id).allowed)
+        self.assertEqual(hub.resource_instance_public_permission_codes(instance.id), [view.code])
+
+        hub.replace_resource_instance_public_permissions(instance.id, [execute.code], actor_id=owner.id)
+        self.assertTrue(hub.can_access_resource_instance(reader_token, execute.code, instance.id).allowed)
+        self.assertFalse(hub.can_access_resource_instance(reader_token, view.code, instance.id).allowed)
+        with self.assertRaises(AuthorizationError):
+            hub.replace_resource_instance_public_permissions(instance.id, [], actor_id=reader.id)
+        hub.replace_resource_instance_public_permissions(instance.id, None, actor_id=hub.repository.get_user_by_username("admin").id)
+        self.assertEqual(hub.resource_instance_public_permission_codes(instance.id), [view.code])
+
+    def test_direct_user_registration_defaults_owner_to_creator(self):
+        hub = AuthHub.in_memory()
+        module = hub.register_module("notes", "Notes")
+        resource = hub.create_resource(module.id, "entity", "note", "Notes")
+        creator = hub.create_user("creator", "password")
+        instance = hub.register_resource_instance(resource.id, "note-1", actor_id=creator.id)
+        self.assertEqual(instance.owner_user_id, creator.id)
 
     def test_business_operation_permissions_are_global_and_cannot_use_record_authorization(self):
         hub = AuthHub.in_memory()

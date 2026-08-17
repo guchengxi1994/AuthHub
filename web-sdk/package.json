@@ -1,6 +1,6 @@
 {
   "name": "@auth-hub/react",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "React permission components for AuthHub-backed business applications.",
   "license": "MIT",
   "keywords": [

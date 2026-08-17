@@ -305,6 +305,21 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         stored = hub.replace_resource_instance_grants(instance.id, grants, actor_id=actor.id)
         return {"items": [_grant_with_user(hub, item) for item in stored]}
 
+    @app.get("/api/resource-instances/by-external/public-permissions")
+    async def get_owned_resource_instance_public_permissions(resource_id: str, external_id: str, authorization: Optional[str] = Header(None)):
+        _actor, instance = _require_resource_grant_manager(hub, authorization, resource_id, external_id)
+        return _public_permission_payload(hub, instance)
+
+    @app.put("/api/resource-instances/by-external/public-permissions")
+    async def replace_owned_resource_instance_public_permissions(payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
+        resource_id = str(payload.get("resource_id") or "")
+        external_id = str(payload.get("external_id") or "")
+        if not resource_id or not external_id: raise ValidationError("resource_id and external_id are required")
+        actor, instance = _require_resource_grant_manager(hub, authorization, resource_id, external_id)
+        permission_codes = payload.get("permission_codes")
+        if permission_codes is not None and not isinstance(permission_codes, list): raise ValidationError("permission_codes must be a list or null")
+        return _public_permission_payload(hub, hub.replace_resource_instance_public_permissions(instance.id, permission_codes, actor_id=actor.id))
+
     @app.get("/api/resource-instances/{instance_id}/grants")
     async def list_resource_instance_grants(instance_id: str, authorization: Optional[str] = Header(None)):
         _require_system_permission(hub, authorization, "entity", "resource-instances", "read")
@@ -318,6 +333,19 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         instance = hub.resource_instance(instance_id)
         _require_delegable_resource_grants(hub, actor, instance, grants)
         return {"items": [hub.resource_instance_grant_dict(item) for item in hub.replace_resource_instance_grants(instance_id, grants, actor_id=actor.id)]}
+
+    @app.get("/api/resource-instances/{instance_id}/public-permissions")
+    async def get_resource_instance_public_permissions(instance_id: str, authorization: Optional[str] = Header(None)):
+        actor = _require_system_permission(hub, authorization, "entity", "resource-instances", "read")
+        instance = hub.resource_instance(instance_id)
+        return _public_permission_payload(hub, instance)
+
+    @app.put("/api/resource-instances/{instance_id}/public-permissions")
+    async def replace_resource_instance_public_permissions(instance_id: str, payload: Dict[str, Any], authorization: Optional[str] = Header(None)):
+        actor = _require_system_permission(hub, authorization, "entity", "resource-instances", "update")
+        permission_codes = payload.get("permission_codes")
+        if permission_codes is not None and not isinstance(permission_codes, list): raise ValidationError("permission_codes must be a list or null")
+        return _public_permission_payload(hub, hub.replace_resource_instance_public_permissions(instance_id, permission_codes, actor_id=actor.id))
 
     @app.post("/api/resource-instances")
     async def register_resource_instance(payload: Dict[str, Any], authorization: Optional[str] = Header(None), x_auth_hub_registration_key: Optional[str] = Header(None, alias="X-AuthHub-Registration-Key")):
@@ -458,6 +486,12 @@ def _grant_with_user(hub: AuthHub, grant: Any) -> Dict[str, Any]:
     if user:
         value["user"] = _share_user_dict(user)
     return value
+
+
+def _public_permission_payload(hub: AuthHub, instance: Any) -> Dict[str, Any]:
+    permissions = [item for item in hub.list_permissions() if item.enabled and item.metadata.get("resource_id") == instance.resource_id]
+    configured = isinstance(instance.metadata.get("public_permission_codes"), (list, tuple, set))
+    return {"resource_instance": hub.resource_instance_dict(instance), "configured": configured, "selected_permission_codes": hub.resource_instance_public_permission_codes(instance.id), "permissions": [hub.permission_dict(item) for item in permissions]}
 
 
 def _module_registrar_actor(hub: AuthHub, authorization: Optional[str], registration_key: Optional[str]) -> str:

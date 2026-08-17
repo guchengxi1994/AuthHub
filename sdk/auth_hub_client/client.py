@@ -227,6 +227,20 @@ class AuthHubClient:
         """Replace explicit per-record grants. This is an administrator API."""
         return self._request("PUT", f"/api/resource-instances/{quote(str(instance_id), safe='')}/grants", {"grants": [dict(item) for item in grants]}, headers={"Authorization": f"Bearer {access_token}"})
 
+    def resource_instance_public_permissions_by_id(self, access_token: str, instance_id: str) -> Mapping[str, Any]:
+        """Read public operations for one record as an administrator."""
+        path = f"/api/resource-instances/{quote(str(instance_id), safe='')}/public-permissions"
+        return self._request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
+
+    def replace_resource_instance_public_permissions_by_id(self, access_token: str, instance_id: str, permission_codes: Optional[Sequence[str]]) -> Mapping[str, Any]:
+        """Set public operations for one record as an administrator."""
+        return self._request(
+            "PUT",
+            f"/api/resource-instances/{quote(str(instance_id), safe='')}/public-permissions",
+            {"permission_codes": list(permission_codes) if permission_codes is not None else None},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
     def resolve_user(self, access_token: str, username: str) -> Mapping[str, Any]:
         """Resolve one exact AuthHub username for a sharing recipient."""
         path = f"/api/auth/users/resolve?{urlencode({'username': username})}"
@@ -251,6 +265,20 @@ class AuthHubClient:
             "PUT",
             "/api/resource-instances/by-external/grants",
             {"resource_id": resource_id, "external_id": external_id, "grants": [dict(item) for item in grants]},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    def resource_instance_public_permissions(self, access_token: str, resource_id: str, external_id: str) -> Mapping[str, Any]:
+        """Read effective public operations as the record owner or administrator."""
+        path = f"/api/resource-instances/by-external/public-permissions?{urlencode({'resource_id': resource_id, 'external_id': external_id})}"
+        return self._request("GET", path, headers={"Authorization": f"Bearer {access_token}"})
+
+    def replace_resource_instance_public_permissions(self, access_token: str, resource_id: str, external_id: str, permission_codes: Optional[Sequence[str]]) -> Mapping[str, Any]:
+        """Set public operations; pass ``None`` to restore default view/read visibility."""
+        return self._request(
+            "PUT",
+            "/api/resource-instances/by-external/public-permissions",
+            {"resource_id": resource_id, "external_id": external_id, "permission_codes": list(permission_codes) if permission_codes is not None else None},
             headers={"Authorization": f"Bearer {access_token}"},
         )
 

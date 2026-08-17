@@ -603,8 +603,12 @@ async function renderResourceInstances() {
   const organizationNames = Object.fromEntries(organizations.items.map(item => [item.id, item.name]));
   const canManageGrants = can('entity', 'resource-instances', 'update') && can('entity', 'resources', 'read') && can('entity', 'users', 'read') && can('entity', 'permissions', 'read') && can('entity', 'modules', 'read') && can('entity', 'organizations', 'read');
   const dataInstances = instances.items.filter(item => isDataResource(resourceById[item.resource_id]));
-  const rows = dataInstances.map(item => `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td>${item.grant_count ? badge(`${item.grant_count} 位用户`, 'active') : '<span class="text-xs text-slate-400">未分享</span>'}</td><td><div class="flex justify-end">${canManageGrants ? button('分享记录', `instance-grants:${item.id}`, 'users-round', 'secondary') : ''}</div></td></tr>`).join('');
-  $('#content').innerHTML = pageHeader('数据记录与分享') + table(['业务数据', '业务记录 ID', '归属用户', '归属组织', '已分享给', '操作'], rows, '暂无业务服务登记的数据记录。数据记录由业务 SDK 在业务事务提交后同步。');
+  const canManagePublic = can('entity', 'resource-instances', 'update');
+  const rows = dataInstances.map(item => {
+    const publicLabel = item.public_permission_configured ? (item.public_permission_codes.length ? badge(`${item.public_permission_codes.length} 项公开`, 'active') : badge('私有', 'muted')) : badge('默认公开查看/读取', 'active');
+    return `<tr><td><div class="font-medium text-slate-800">${esc(resourceNames[item.resource_id] || item.resource_id)}</div><div class="mt-0.5 max-w-[260px] truncate font-mono text-xs text-slate-500">${esc(item.resource_id)}</div></td><td class="font-mono text-xs text-slate-700">${esc(item.external_id)}</td><td class="text-slate-600">${esc(userNames[item.owner_user_id] || '-')}</td><td class="text-slate-600">${esc(organizationNames[item.organization_id] || '-')}</td><td>${publicLabel}</td><td>${item.grant_count ? badge(`${item.grant_count} 位用户`, 'active') : '<span class="text-xs text-slate-400">未分享</span>'}</td><td><div class="flex justify-end gap-1">${canManagePublic ? button('公开权限', `instance-public:${item.id}`, 'globe-2', 'secondary') : ''}${canManageGrants ? button('分享记录', `instance-grants:${item.id}`, 'users-round', 'secondary') : ''}</div></td></tr>`;
+  }).join('');
+  $('#content').innerHTML = pageHeader('数据记录与分享') + table(['业务数据', '业务记录 ID', '归属用户', '归属组织', '公开权限', '已分享给', '操作'], rows, '暂无业务服务登记的数据记录。数据记录由业务 SDK 在业务事务提交后同步。');
   bindActions(); refreshIcons();
 }
 
@@ -657,6 +661,30 @@ async function showInstanceGrants(instanceId) {
       await api(`/api/resource-instances/${encodeURIComponent(instanceId)}/grants`, { method: 'PUT', body: JSON.stringify({ grants: payload }) });
       el.close(); setToast('记录分享已保存'); renderResourceInstances();
     } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '保存分享'); }
+  };
+}
+
+async function showInstancePublicPermissions(instanceId) {
+  const [data, modules, resources] = await Promise.all([api(`/api/resource-instances/${encodeURIComponent(instanceId)}/public-permissions`), api('/api/modules'), api('/api/resources')]);
+  const groups = permissionGroups(data.permissions, modules.items, resources.items);
+  let restoreDefault = !data.configured;
+  let selectedCodes = new Set(data.selected_permission_codes);
+  const el = openModal('配置公开权限', `<form id="instance-public-form" class="space-y-4"><div class="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm leading-6 text-blue-800">默认公开查看和读取；清空选择后，这条记录只按角色、归属和分享授权判断。</div><div class="flex items-center justify-between gap-3"><span class="label !mb-0">公开操作</span><button type="button" id="public-default" class="btn-secondary">恢复默认</button></div>${selectionToolbar('public_permission_codes')}<div id="instance-public-options" class="selection-list selection-list-tall"></div><div class="modal-footer"><button type="button" class="btn-secondary" id="form-cancel">取消</button><button class="btn-primary" type="submit">${icon('save')}保存公开权限</button></div></form>`, true);
+  const renderOptions = () => {
+    $('#instance-public-options', el).innerHTML = permissionOptions(groups, 'public_permission_codes', selectedCodes);
+    bindSelectionToolbar(el, 'public_permission_codes', () => { restoreDefault = false; selectedCodes = new Set($$('input[name="public_permission_codes"]:checked', el).map(input => input.value)); });
+  };
+  renderOptions();
+  $('#public-default', el).onclick = () => { restoreDefault = true; selectedCodes = new Set(data.permissions.filter(item => ['view', 'read'].includes(item.action)).map(item => item.code)); renderOptions(); };
+  $('#form-cancel', el).onclick = () => el.close();
+  $('#instance-public-form', el).onsubmit = async event => {
+    event.preventDefault();
+    const buttonEl = $('button[type="submit"]', event.currentTarget);
+    try {
+      setLoading(buttonEl, true, '保存公开权限');
+      await api(`/api/resource-instances/${encodeURIComponent(instanceId)}/public-permissions`, { method: 'PUT', body: JSON.stringify({ permission_codes: restoreDefault ? null : [...selectedCodes] }) });
+      el.close(); setToast('公开权限已保存'); renderResourceInstances();
+    } catch (error) { setNotice(error.message); } finally { setLoading(buttonEl, false, '保存公开权限'); }
   };
 }
 
@@ -719,6 +747,7 @@ async function performAction(action) {
   if (kind === 'user-organizations') return showUserOrganizations(parts[0]);
   if (kind === 'role-permissions') return showRolePermissions(parts[0]);
   if (kind === 'instance-grants') return showInstanceGrants(parts[0]);
+  if (kind === 'instance-public') return showInstancePublicPermissions(parts[0]);
   if (kind === 'org-edit') return showOrganization(parts[0]);
   if (kind === 'user-toggle') {
     try { await api(`/api/users/${parts[0]}`, { method: 'PATCH', body: JSON.stringify({ enabled: parts[1] === 'true' }) }); setToast(parts[1] === 'true' ? '用户已启用' : '用户已停用'); renderUsers(); } catch (error) { setNotice(error.message); }
