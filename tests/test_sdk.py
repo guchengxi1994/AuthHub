@@ -265,6 +265,37 @@ class ClientSdkTests(unittest.TestCase):
             self.assertTrue(allowed.json()["results"][0]["allowed"])
             self.assertEqual(allowed.json()["results"][0]["matched_by"], "resource_grant")
 
+    def test_registration_key_replays_resource_grants_from_business_source(self):
+        from auth_hub.api import create_app
+
+        hub = AuthHub.in_memory(AuthHubSettings(module_registration_key="service-key"))
+        module = hub.register_module("catalog", "Catalog")
+        resource = hub.create_resource(module.id, "custom", "item", "Catalog item")
+        execute = hub.create_permission(None, "Execute item", module_id=module.id, resource_id=resource.id, action="execute")
+        recipient = hub.create_user("catalog-user", "password")
+        app = create_app(auth_hub=hub)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/resource-instances",
+                headers={"X-AuthHub-Registration-Key": "service-key"},
+                json={
+                    "resource_id": resource.id,
+                    "external_id": "item-100",
+                    "metadata": {"public_permission_codes": []},
+                    "grants": [{"user_id": recipient.id, "permission_codes": [execute.code]}],
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            recipient_token = client.post("/api/auth/login", json={"username": "catalog-user", "password": "password"}).json()["access_token"]
+            decision = client.post(
+                "/api/auth/check-resource",
+                headers={"Authorization": f"Bearer {recipient_token}"},
+                json={"permission": execute.code, "resource_id": resource.id, "external_id": "item-100"},
+            ).json()
+            self.assertTrue(decision["allowed"])
+            self.assertEqual(decision["matched_by"], "resource_grant")
+
     def test_resource_owner_can_share_by_external_id_without_admin_access(self):
         from auth_hub.api import create_app
 

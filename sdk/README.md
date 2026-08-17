@@ -134,6 +134,24 @@ AuthHub administrators may additionally share one registered business data recor
 
 The business database remains the source of truth. Create/update the business record first and then call the idempotent registration method; after deleting the business record, call `client.unregister_resource_instance(manifest.resource_id("order"), str(order.id))`. AuthHub never deletes business records and deliberately rejects deleting a resource definition or module while instance indexes remain.
 
+For a business-owned record whose access policy is also stored in that business
+database, the registration call can replay its complete per-record grants. The
+module registration key stays in the backend only; do not expose it to a web
+client. This is intended for recovery and post-commit reconciliation, while
+normal owner/admin screens can continue to use the bearer-token grant APIs.
+
+```python
+client.register_resource_instance(
+    manifest.resource_id("order"),
+    str(order.id),
+    owner_user_id=order.creator_id,
+    metadata={"public_permission_codes": []},  # private
+    grants=[
+        {"user_id": reviewer_id, "permission_codes": [manifest.permission_code("order", "view")]},
+    ],
+)
+```
+
 ## SQLAlchemy Transactional Outbox
 
 For a production business service, do not call AuthHub from an ORM signal or a

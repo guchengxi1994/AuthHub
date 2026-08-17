@@ -204,12 +204,19 @@ class AuthHubClient:
     def user_permissions(self, access_token: str) -> Mapping[str, Any]:
         return self._request("GET", "/api/auth/user-permissions", headers={"Authorization": f"Bearer {access_token}"})
 
-    def register_resource_instance(self, resource_id: str, external_id: str, *, owner_user_id: Any = _UNSET, organization_id: Any = _UNSET, metadata: Any = _UNSET) -> Mapping[str, Any]:
-        """Register ownership metadata for one business data record."""
+    def register_resource_instance(self, resource_id: str, external_id: str, *, owner_user_id: Any = _UNSET, organization_id: Any = _UNSET, metadata: Any = _UNSET, grants: Any = _UNSET) -> Mapping[str, Any]:
+        """Register ownership and an optional durable access policy for one record.
+
+        ``grants`` is intentionally service-authenticated through the module
+        registration key.  It lets a business service replay its own stored
+        record-level policy after AuthHub recovery, without retaining an end
+        user's bearer token in a background worker.
+        """
         payload: Dict[str, Any] = {"resource_id": resource_id, "external_id": external_id}
         if owner_user_id is not _UNSET: payload["owner_user_id"] = owner_user_id
         if organization_id is not _UNSET: payload["organization_id"] = organization_id
         if metadata is not _UNSET: payload["metadata"] = dict(metadata or {})
+        if grants is not _UNSET: payload["grants"] = [dict(item) for item in (grants or [])]
         headers = {"X-AuthHub-Registration-Key": self.registration_key} if self.registration_key else {}
         return self._request("POST", "/api/resource-instances", payload, headers=headers)
 

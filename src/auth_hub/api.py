@@ -352,6 +352,15 @@ def create_app(auth_hub: Optional[AuthHub] = None, *, database_path: str = "auth
         actor_id = _module_registrar_actor(hub, authorization, x_auth_hub_registration_key)
         changes = {key: payload[key] for key in ("owner_user_id", "organization_id", "metadata") if key in payload}
         instance = hub.register_resource_instance(str(payload.get("resource_id") or ""), str(payload.get("external_id") or ""), actor_id=actor_id, **changes)
+        # A registration key represents the trusted business service.  Its
+        # database is the durable source for record sharing, so it must be able
+        # to replay a complete grant list after an AuthHub recovery.  End-user
+        # management routes above remain owner/admin protected.
+        if "grants" in payload:
+            grants = payload["grants"]
+            if not isinstance(grants, list):
+                raise ValidationError("grants must be a list")
+            hub.replace_resource_instance_grants(instance.id, grants, actor_id=actor_id)
         return hub.resource_instance_dict(instance)
 
     @app.delete("/api/resource-instances")
